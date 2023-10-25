@@ -36,5 +36,6 @@ CREATE TABLE default.actions
     return_value_int Nullable(UInt128),
 )
     ENGINE = MergeTree()
-PRIMARY KEY (account_id, block_timestamp, receipt_index, action_index)
+PRIMARY KEY (account_id, block_timestamp)
+ORDER BY (account_id, block_timestamp, receipt_index, action_index)
 ```

@@ -318,7 +318,7 @@ async fn extract_info(
                             method_name: row.method_name,
                             args_account_id: row.args_account_id,
                             args_receiver_id: row.args_receiver_id,
-                            args_sender_id row.args_sender_id,
+                            args_sender_id: row.args_sender_id,
                             args_token_id: row.args_token_id,
                             args_amount: row.args_amount,
                             return_value_int: row.return_value_int,
