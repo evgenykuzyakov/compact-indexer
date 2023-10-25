@@ -122,7 +122,7 @@ fn main() {
                 download_genesis: false,
                 download_genesis_url: None,
                 download_records_url: None,
-                download_config: false,
+                download_config: true,
                 download_config_url: Some("https://s3-us-west-1.amazonaws.com/build.nearprotocol.com/nearcore-deploy/mainnet/config.json".to_string()),
                 boot_nodes: None,
                 max_gas_burnt_view: None
