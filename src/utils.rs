@@ -5,19 +5,18 @@ use serde::Deserialize;
 pub fn extract_return_value_int(execution_status: ExecutionStatusView) -> Option<u128> {
     if let ExecutionStatusView::SuccessValue(value) = execution_status {
         String::from_utf8(value).ok()?.parse::<u128>().ok()
+    } else {
+        None
     }
-    None
 }
-
-#[derive(Deserialize)]
-pub struct U128(#[serde(with = "dec_format")] pub u128);
 
 #[derive(Deserialize)]
 pub struct ArgsData {
     pub account_id: Option<AccountId>,
     pub receiver_id: Option<AccountId>,
+    pub sender_id: Option<AccountId>,
     pub token_id: Option<String>,
-    pub amount: Option<U128>,
+    pub amount: Option<String>,
 }
 
 const MAX_TOKEN_LENGTH: usize = 64;

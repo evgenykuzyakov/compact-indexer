@@ -30,6 +30,7 @@ CREATE TABLE default.actions
     method_name Nullable(String),
     args_account_id Nullable(String),
     args_receiver_id Nullable(String),
+    args_sender_id Nullable(String),
     args_token_id Nullable(String),
     args_amount Nullable(UInt128),
     return_value_int Nullable(UInt128),

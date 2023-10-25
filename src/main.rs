@@ -7,10 +7,8 @@ use near_indexer::near_primitives::views::{
     AccessKeyPermissionView, ActionView, ExecutionOutcomeView, ExecutionStatusView,
     ReceiptEnumView, ReceiptView,
 };
-use std::collections::HashSet;
 use std::convert::TryFrom;
 use std::env;
-use std::str::FromStr;
 use tracing_subscriber::EnvFilter;
 
 use clickhouse_rs::{row, types::Block, ClientHandle, Pool};
@@ -26,8 +24,6 @@ fn establish_connection() -> Pool {
 }
 
 const PROJECT_ID: &str = "compact_indexer";
-const INTERVAL: std::time::Duration = std::time::Duration::from_millis(100);
-const MAX_DELAY_TIME: std::time::Duration = std::time::Duration::from_secs(120);
 
 mod receipt_status {
     pub const FAILURE: &str = "FAILURE";
@@ -68,6 +64,7 @@ pub struct ActionRow {
     pub method_name: Option<String>,
     pub args_account_id: Option<String>,
     pub args_receiver_id: Option<String>,
+    pub args_sender_id: Option<String>,
     pub args_token_id: Option<String>,
     pub args_amount: Option<u128>,
     pub return_value_int: Option<u128>,
@@ -137,7 +134,7 @@ fn main() {
             let indexer_config = near_indexer::IndexerConfig {
                 home_dir: std::path::PathBuf::from(near_indexer::get_default_home()),
                 sync_mode: near_indexer::SyncModeEnum::FromInterruption,
-                await_for_node_synced: near_indexer::AwaitForNodeSyncedEnum::WaitForFullSync,
+                await_for_node_synced: near_indexer::AwaitForNodeSyncedEnum::StreamWhileSyncing,
                 validate_genesis: false,
             };
             let sys = actix::System::new();
@@ -158,13 +155,14 @@ async fn listen_blocks(
     mut stream: tokio::sync::mpsc::Receiver<near_indexer::StreamerMessage>,
     pool: Pool,
 ) {
-    let mut client = pool.get_handle().await?;
+    let mut client = pool
+        .get_handle()
+        .await
+        .expect("Failed to get ClickHouse client handle");
     while let Some(streamer_message) = stream.recv().await {
         extract_info(&mut client, streamer_message).await.unwrap();
     }
 }
-
-const EVENT_LOG_PREFIX: &str = "EVENT_JSON:";
 
 async fn extract_info(
     client: &mut ClientHandle,
@@ -173,7 +171,6 @@ async fn extract_info(
     let block_height = msg.block.header.height;
     let block_hash = msg.block.header.hash.to_string();
     let block_timestamp = msg.block.header.timestamp_nanosec;
-    // let block_epoch_id = msg.block.header.epoch_id.to_string();
 
     let mut block = Block::new();
     let mut receipt_index: u16 = 0;
@@ -218,7 +215,7 @@ async fn extract_info(
                             action_index,
                             predecessor_id: predecessor_id.clone(),
                             account_id: account_id.clone(),
-                            status: status.clone(),
+                            status,
                             action: match action {
                                 ActionView::CreateAccount => action_kind::CREATE_ACCOUNT,
                                 ActionView::DeployContract { .. } => action_kind::DEPLOY_CONTRACT,
@@ -277,17 +274,26 @@ async fn extract_info(
                                 _ => None,
                             },
                             args_account_id: args_data.as_ref().and_then(|args| {
-                                args.account_id.map(|account_id| account_id.to_string())
+                                args.account_id
+                                    .as_ref()
+                                    .map(|account_id| account_id.to_string())
                             }),
                             args_receiver_id: args_data.as_ref().and_then(|args| {
-                                args.receiver_id.map(|receiver_id| receiver_id.to_string())
+                                args.receiver_id
+                                    .as_ref()
+                                    .map(|receiver_id| receiver_id.to_string())
+                            }),
+                            args_sender_id: args_data.as_ref().and_then(|args| {
+                                args.sender_id
+                                    .as_ref()
+                                    .map(|sender_id| sender_id.to_string())
                             }),
                             args_token_id: args_data
                                 .as_ref()
                                 .and_then(|args| args.token_id.clone()),
-                            args_amount: args_data
-                                .as_ref()
-                                .and_then(|args| args.amount.map(|amount| amount.0)),
+                            args_amount: args_data.as_ref().and_then(|args| {
+                                args.amount.as_ref().and_then(|amount| amount.parse().ok())
+                            }),
                             return_value_int,
                         };
                         block.push(row! {
@@ -312,10 +318,11 @@ async fn extract_info(
                             method_name: row.method_name,
                             args_account_id: row.args_account_id,
                             args_receiver_id: row.args_receiver_id,
+                            args_sender_id row.args_sender_id,
                             args_token_id: row.args_token_id,
                             args_amount: row.args_amount,
                             return_value_int: row.return_value_int,
-                        })
+                        })?;
                     }
                 }
                 ReceiptEnumView::Data { .. } => {}
