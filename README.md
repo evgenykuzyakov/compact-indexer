@@ -1,6 +1,6 @@
 # Compact indexer
 
-Indexes NEAR blockchain into a compact format stored in a postgres.
+Indexes NEAR blockchain actions and store them in a ClickHouse DB.
 
 ## Create ClickHouse table
 
