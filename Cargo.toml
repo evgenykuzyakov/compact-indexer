@@ -1,5 +1,5 @@
 [package]
-name = "comact-indexer"
+name = "compact-indexer"
 version = "0.0.1"
 authors = ["Eugene The Dream"]
 edition = "2018"
