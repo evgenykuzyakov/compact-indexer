@@ -2,6 +2,7 @@ mod retriable;
 mod utils;
 
 use crate::utils::*;
+use clickhouse::{Client, Row};
 use dotenv::dotenv;
 use near_indexer::near_primitives::views::{
     AccessKeyPermissionView, ActionView, ExecutionOutcomeView, ExecutionStatusView,
@@ -11,16 +12,15 @@ use std::convert::TryFrom;
 use std::env;
 use tracing_subscriber::EnvFilter;
 
-use clickhouse_rs::{row, types::Block, ClientHandle, Pool};
 use near_indexer::near_primitives::hash::CryptoHash;
+use serde::Serialize;
 
-fn get_database_credentials() -> String {
-    env::var("DATABASE_URL").expect("DATABASE_URL must be set in .env file")
-}
-
-fn establish_connection() -> Pool {
-    let database_url = get_database_credentials();
-    Pool::new(database_url)
+fn establish_connection() -> Client {
+    Client::default()
+        .with_url(env::var("DATABASE_URL").unwrap())
+        .with_user(env::var("DATABASE_USER").unwrap())
+        .with_password(env::var("DATABASE_PASSWORD").unwrap())
+        .with_database(env::var("DATABASE_DATABASE").unwrap())
 }
 
 const PROJECT_ID: &str = "compact_indexer";
@@ -42,6 +42,7 @@ mod action_kind {
     pub const DELEGATE: &str = "DELEGATE";
 }
 
+#[derive(Row, Serialize)]
 pub struct ActionRow {
     pub block_height: u64,
     pub block_hash: String,
@@ -130,7 +131,7 @@ fn main() {
             near_indexer::indexer_init_configs(&home_dir, config_args).unwrap();
         }
         "run" => {
-            let pool = establish_connection();
+            let client = establish_connection();
             let indexer_config = near_indexer::IndexerConfig {
                 home_dir: std::path::PathBuf::from(near_indexer::get_default_home()),
                 sync_mode: near_indexer::SyncModeEnum::FromInterruption,
@@ -141,7 +142,7 @@ fn main() {
             sys.block_on(async move {
                 let indexer = near_indexer::Indexer::new(indexer_config).unwrap();
                 let stream = indexer.streamer();
-                listen_blocks(stream, pool).await;
+                listen_blocks(stream, client).await;
 
                 actix::System::current().stop();
             });
@@ -153,26 +154,21 @@ fn main() {
 
 async fn listen_blocks(
     mut stream: tokio::sync::mpsc::Receiver<near_indexer::StreamerMessage>,
-    pool: Pool,
+    client: Client,
 ) {
-    let mut client = pool
-        .get_handle()
-        .await
-        .expect("Failed to get ClickHouse client handle");
     while let Some(streamer_message) = stream.recv().await {
-        extract_info(&mut client, streamer_message).await.unwrap();
+        extract_info(client.clone(), streamer_message)
+            .await
+            .unwrap();
     }
 }
 
-async fn extract_info(
-    client: &mut ClientHandle,
-    msg: near_indexer::StreamerMessage,
-) -> anyhow::Result<()> {
+async fn extract_info(client: Client, msg: near_indexer::StreamerMessage) -> anyhow::Result<()> {
     let block_height = msg.block.header.height;
     let block_hash = msg.block.header.hash.to_string();
     let block_timestamp = msg.block.header.timestamp_nanosec;
 
-    let mut block = Block::new();
+    let mut insert = client.insert("actions")?;
     let mut receipt_index: u16 = 0;
     for shard in msg.shards {
         for outcome in shard.receipt_execution_outcomes {
@@ -296,33 +292,7 @@ async fn extract_info(
                             }),
                             return_value_int,
                         };
-                        block.push(row! {
-                            block_height: row.block_height,
-                            block_hash: row.block_hash,
-                            block_timestamp: row.block_timestamp,
-                            receipt_id: row.receipt_id,
-                            receipt_index: row.receipt_index,
-                            action_index: row.action_index,
-                            predecessor_id: row.predecessor_id,
-                            account_id: row.account_id,
-                            status: row.status,
-                            action: row.action,
-                            contract_hash: row.contract_hash,
-                            public_key: row.public_key,
-                            access_key_contract_id: row.access_key_contract_id,
-                            deposit: row.deposit,
-                            gas_price: row.gas_price,
-                            attached_gas: row.attached_gas,
-                            gas_burnt: row.gas_burnt,
-                            tokens_burnt: row.tokens_burnt,
-                            method_name: row.method_name,
-                            args_account_id: row.args_account_id,
-                            args_receiver_id: row.args_receiver_id,
-                            args_sender_id: row.args_sender_id,
-                            args_token_id: row.args_token_id,
-                            args_amount: row.args_amount,
-                            return_value_int: row.return_value_int,
-                        })?;
+                        insert.write(&row).await?;
                     }
                 }
                 ReceiptEnumView::Data { .. } => {}
@@ -333,9 +303,7 @@ async fn extract_info(
         }
     }
 
-    if !block.is_empty() {
-        client.insert("actions", block).await?;
-    }
+    insert.end().await?;
 
     Ok(())
 }

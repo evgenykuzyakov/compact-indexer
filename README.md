@@ -39,3 +39,16 @@ CREATE TABLE default.actions
 PRIMARY KEY (account_id, block_timestamp)
 ORDER BY (account_id, block_timestamp, receipt_index, action_index)
 ```
+
+## To run
+
+Create `.env` file and add:
+```
+DATABASE_URL=tcp://default:PASSWORD@HOST:9440/defaut?secure=true
+```
+
+```bash
+cargo build --release
+./target/release/compact-indexer init
+./target/release/compact-indexer run
+```
