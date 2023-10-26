@@ -22,7 +22,7 @@ CREATE TABLE default.actions
     contract_hash Nullable(String),
     public_key Nullable(String),
     access_key_contract_id Nullable(String),
-    action_deposit Nullable(UInt128),
+    deposit Nullable(UInt128),
     gas_price UInt128,
     attached_gas Nullable(UInt64),
     gas_burnt UInt64,
@@ -42,9 +42,12 @@ ORDER BY (account_id, block_timestamp, receipt_index, action_index)
 
 ## To run
 
-Create `.env` file and add:
+Create `.env` file and fill details:
 ```
-DATABASE_URL=tcp://default:PASSWORD@HOST:9440/defaut?secure=true
+DATABASE_URL=https://FOOBAR.clickhouse.cloud:8443
+DATABASE_USER=default
+DATABASE_PASSWORD=PASSWORD
+DATABASE_DATABASE=default
 ```
 
 ```bash
