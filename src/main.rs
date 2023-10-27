@@ -303,9 +303,7 @@ async fn extract_info(client: &Client, msg: near_indexer::StreamerMessage) -> an
         }
     }
 
-    tracing::log::info!(target: PROJECT_ID, "Before insert",);
     insert.end().await?;
-    tracing::log::info!(target: PROJECT_ID, "After insert",);
 
     Ok(())
 }
