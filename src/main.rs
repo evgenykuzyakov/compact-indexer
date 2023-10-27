@@ -101,10 +101,7 @@ fn main() {
         .with_writer(std::io::stderr)
         .init();
 
-    tracing::log::info!(
-        target: PROJECT_ID,
-        "Starting indexer",
-    );
+    tracing::log::info!(target: PROJECT_ID, "Starting indexer",);
 
     let command = args
         .get(1)
@@ -303,15 +300,9 @@ async fn extract_info(client: Client, msg: near_indexer::StreamerMessage) -> any
         }
     }
 
-    tracing::log::info!(
-        target: PROJECT_ID,
-        "Before insert",
-    );
+    tracing::log::info!(target: PROJECT_ID, "Before insert",);
     insert.end().await?;
-    tracing::log::info!(
-        target: PROJECT_ID,
-        "After insert",
-    );
+    tracing::log::info!(target: PROJECT_ID, "After insert",);
 
     Ok(())
 }
