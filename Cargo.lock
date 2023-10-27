@@ -1124,6 +1124,7 @@ dependencies = [
  "openssl-probe",
  "serde",
  "serde_json",
+ "serde_repr",
  "tokio",
  "tokio-stream",
  "tracing",

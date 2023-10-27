@@ -8,6 +8,7 @@ use near_indexer::near_primitives::views::{
     AccessKeyPermissionView, ActionView, ExecutionOutcomeView, ExecutionStatusView,
     ReceiptEnumView, ReceiptView,
 };
+use serde_repr::{Deserialize_repr, Serialize_repr};
 use std::convert::TryFrom;
 use std::env;
 use tracing_subscriber::EnvFilter;
@@ -25,21 +26,25 @@ fn establish_connection() -> Client {
 
 const PROJECT_ID: &str = "compact_indexer";
 
-mod receipt_status {
-    pub const FAILURE: &str = "FAILURE";
-    pub const SUCCESS: &str = "SUCCESS";
+#[derive(Copy, Clone, Debug, Serialize_repr, Deserialize_repr)]
+#[repr(u8)]
+pub enum ReceiptStatus {
+    Failure = 1,
+    Success = 2,
 }
 
-mod action_kind {
-    pub const CREATE_ACCOUNT: &str = "CREATE_ACCOUNT";
-    pub const DEPLOY_CONTRACT: &str = "DEPLOY_CONTRACT";
-    pub const FUNCTION_CALL: &str = "FUNCTION_CALL";
-    pub const TRANSFER: &str = "TRANSFER";
-    pub const STAKE: &str = "STAKE";
-    pub const ADD_KEY: &str = "ADD_KEY";
-    pub const DELETE_KEY: &str = "DELETE_KEY";
-    pub const DELETE_ACCOUNT: &str = "DELETE_ACCOUNT";
-    pub const DELEGATE: &str = "DELEGATE";
+#[derive(Copy, Clone, Debug, Serialize_repr, Deserialize_repr)]
+#[repr(u8)]
+pub enum ActionKind {
+    CreateAccount = 1,
+    DeployContract = 2,
+    FunctionCall = 3,
+    Transfer = 4,
+    Stake = 5,
+    AddKey = 6,
+    DeleteKey = 7,
+    DeleteAccount = 8,
+    Delegate = 9,
 }
 
 #[derive(Row, Serialize)]
@@ -52,8 +57,8 @@ pub struct ActionRow {
     pub action_index: u8,
     pub predecessor_id: String,
     pub account_id: String,
-    pub status: &'static str,
-    pub action: &'static str,
+    pub status: ReceiptStatus,
+    pub action: ActionKind,
     pub contract_hash: Option<String>,
     pub public_key: Option<String>,
     pub access_key_contract_id: Option<String>,
@@ -154,13 +159,11 @@ async fn listen_blocks(
     client: Client,
 ) {
     while let Some(streamer_message) = stream.recv().await {
-        extract_info(client.clone(), streamer_message)
-            .await
-            .unwrap();
+        extract_info(&client, streamer_message).await.unwrap();
     }
 }
 
-async fn extract_info(client: Client, msg: near_indexer::StreamerMessage) -> anyhow::Result<()> {
+async fn extract_info(client: &Client, msg: near_indexer::StreamerMessage) -> anyhow::Result<()> {
     let block_height = msg.block.header.height;
     let block_hash = msg.block.header.hash.to_string();
     let block_timestamp = msg.block.header.timestamp_nanosec;
@@ -185,10 +188,10 @@ async fn extract_info(client: Client, msg: near_indexer::StreamerMessage) -> any
                 ..
             } = outcome.execution_outcome.outcome;
             let status = match &execution_status {
-                ExecutionStatusView::Unknown => receipt_status::FAILURE,
-                ExecutionStatusView::Failure(_) => receipt_status::FAILURE,
-                ExecutionStatusView::SuccessValue(_) => receipt_status::SUCCESS,
-                ExecutionStatusView::SuccessReceiptId(_) => receipt_status::SUCCESS,
+                ExecutionStatusView::Unknown => ReceiptStatus::Failure,
+                ExecutionStatusView::Failure(_) => ReceiptStatus::Failure,
+                ExecutionStatusView::SuccessValue(_) => ReceiptStatus::Success,
+                ExecutionStatusView::SuccessReceiptId(_) => ReceiptStatus::Success,
             };
             let return_value_int = extract_return_value_int(execution_status);
             match receipt {
@@ -210,15 +213,15 @@ async fn extract_info(client: Client, msg: near_indexer::StreamerMessage) -> any
                             account_id: account_id.clone(),
                             status,
                             action: match action {
-                                ActionView::CreateAccount => action_kind::CREATE_ACCOUNT,
-                                ActionView::DeployContract { .. } => action_kind::DEPLOY_CONTRACT,
-                                ActionView::FunctionCall { .. } => action_kind::FUNCTION_CALL,
-                                ActionView::Transfer { .. } => action_kind::TRANSFER,
-                                ActionView::Stake { .. } => action_kind::STAKE,
-                                ActionView::AddKey { .. } => action_kind::ADD_KEY,
-                                ActionView::DeleteKey { .. } => action_kind::DELETE_KEY,
-                                ActionView::DeleteAccount { .. } => action_kind::DELETE_ACCOUNT,
-                                ActionView::Delegate { .. } => action_kind::DELEGATE,
+                                ActionView::CreateAccount => ActionKind::CreateAccount,
+                                ActionView::DeployContract { .. } => ActionKind::DeployContract,
+                                ActionView::FunctionCall { .. } => ActionKind::FunctionCall,
+                                ActionView::Transfer { .. } => ActionKind::Transfer,
+                                ActionView::Stake { .. } => ActionKind::Stake,
+                                ActionView::AddKey { .. } => ActionKind::AddKey,
+                                ActionView::DeleteKey { .. } => ActionKind::DeleteKey,
+                                ActionView::DeleteAccount { .. } => ActionKind::DeleteAccount,
+                                ActionView::Delegate { .. } => ActionKind::Delegate,
                             },
                             contract_hash: match &action {
                                 ActionView::DeployContract { code } => {
