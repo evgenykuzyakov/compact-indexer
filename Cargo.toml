@@ -2,7 +2,8 @@
 name = "compact-indexer"
 version = "0.0.1"
 authors = ["Eugene The Dream"]
-edition = "2018"
+rust-version = "1.69.0"
+edition = "2021"
 
 [dependencies]
 actix = "=0.13.0"
@@ -27,3 +28,8 @@ serde_json = "1"
 near-indexer = { git = "https://github.com/near/nearcore", rev = "1.35.0" }
 
 clickhouse.rs = "0.11.6"
+
+### Locking versions for 1.69.0
+clap = "=4.2.4"
+anstyle = "=1.0.0"
+anstyle-parse = "=0.2.0"
