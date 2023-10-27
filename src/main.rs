@@ -135,7 +135,7 @@ fn main() {
             let indexer_config = near_indexer::IndexerConfig {
                 home_dir: std::path::PathBuf::from(near_indexer::get_default_home()),
                 sync_mode: near_indexer::SyncModeEnum::FromInterruption,
-                await_for_node_synced: near_indexer::AwaitForNodeSyncedEnum::StreamWhileSyncing,
+                await_for_node_synced: near_indexer::AwaitForNodeSyncedEnum::WaitForFullSync,
                 validate_genesis: false,
             };
             let sys = actix::System::new();
@@ -303,7 +303,15 @@ async fn extract_info(client: Client, msg: near_indexer::StreamerMessage) -> any
         }
     }
 
+    tracing::log::info!(
+        target: PROJECT_ID,
+        "Before insert",
+    );
     insert.end().await?;
+    tracing::log::info!(
+        target: PROJECT_ID,
+        "After insert",
+    );
 
     Ok(())
 }
