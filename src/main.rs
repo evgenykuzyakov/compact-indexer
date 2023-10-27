@@ -114,28 +114,10 @@ fn main() {
         .expect("You need to provide a command: `init` or `run` as arg");
 
     match command {
-        "init" => {
-            let config_args = near_indexer::InitConfigArgs {
-                chain_id: Some("mainnet".to_string()),
-                account_id: None,
-                test_seed: None,
-                num_shards: 4,
-                fast: false,
-                genesis: None,
-                download_genesis: true,
-                download_genesis_url: Some("https://s3-us-west-1.amazonaws.com/build.nearprotocol.com/nearcore-deploy/mainnet/genesis.json".to_string()),
-                download_records_url: None,
-                download_config: true,
-                download_config_url: Some("https://s3-us-west-1.amazonaws.com/build.nearprotocol.com/nearcore-deploy/mainnet/config.json".to_string()),
-                boot_nodes: None,
-                max_gas_burnt_view: None
-            };
-            near_indexer::indexer_init_configs(&home_dir, config_args).unwrap();
-        }
         "run" => {
             let client = establish_connection();
             let indexer_config = near_indexer::IndexerConfig {
-                home_dir: std::path::PathBuf::from(near_indexer::get_default_home()),
+                home_dir,
                 sync_mode: near_indexer::SyncModeEnum::FromInterruption,
                 await_for_node_synced: near_indexer::AwaitForNodeSyncedEnum::WaitForFullSync,
                 validate_genesis: false,

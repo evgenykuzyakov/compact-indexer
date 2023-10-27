@@ -11,7 +11,7 @@ CREATE TABLE default.actions
 (
     block_height UInt64,
     block_hash String,
-    block_timestamp DateTime64(9),
+    block_timestamp DateTime64(9, 'UTC'),
     receipt_id String,
     receipt_index UInt16,
     action_index UInt8,
@@ -50,8 +50,9 @@ DATABASE_PASSWORD=PASSWORD
 DATABASE_DATABASE=default
 ```
 
+Follow a NEAR RPC node setup instructions to get a node running.
+
 ```bash
 cargo build --release
-./target/release/compact-indexer init
 ./target/release/compact-indexer run
 ```
