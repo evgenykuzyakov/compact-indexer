@@ -1,4 +1,3 @@
-mod retriable;
 mod utils;
 
 use crate::utils::*;
@@ -15,6 +14,9 @@ use tracing_subscriber::EnvFilter;
 
 use near_indexer::near_primitives::hash::CryptoHash;
 use serde::Serialize;
+
+use std::time::Duration;
+use tokio_retry::{strategy::ExponentialBackoff, Retry};
 
 fn establish_connection() -> Client {
     Client::default()
@@ -55,6 +57,8 @@ pub struct ActionRow {
     pub receipt_id: String,
     pub receipt_index: u16,
     pub action_index: u8,
+    pub signer_id: String,
+    pub signer_public_key: String,
     pub predecessor_id: String,
     pub account_id: String,
     pub status: ReceiptStatus,
@@ -69,10 +73,15 @@ pub struct ActionRow {
     pub tokens_burnt: u128,
     pub method_name: Option<String>,
     pub args_account_id: Option<String>,
+    pub args_new_account_id: Option<String>,
+    pub args_owner_id: Option<String>,
     pub args_receiver_id: Option<String>,
     pub args_sender_id: Option<String>,
     pub args_token_id: Option<String>,
     pub args_amount: Option<u128>,
+    pub args_balance: Option<u128>,
+    pub args_nft_contract_id: Option<String>,
+    pub args_nft_token_id: Option<String>,
     pub return_value_int: Option<u128>,
 }
 
@@ -150,7 +159,8 @@ async fn extract_info(client: &Client, msg: near_indexer::StreamerMessage) -> an
     let block_hash = msg.block.header.hash.to_string();
     let block_timestamp = msg.block.header.timestamp_nanosec;
 
-    let mut insert = client.insert("actions")?;
+    let mut rows = vec![];
+
     let mut receipt_index: u16 = 0;
     for shard in msg.shards {
         for outcome in shard.receipt_execution_outcomes {
@@ -178,7 +188,11 @@ async fn extract_info(client: &Client, msg: near_indexer::StreamerMessage) -> an
             let return_value_int = extract_return_value_int(execution_status);
             match receipt {
                 ReceiptEnumView::Action {
-                    actions, gas_price, ..
+                    signer_id,
+                    signer_public_key,
+                    actions,
+                    gas_price,
+                    ..
                 } => {
                     for (action_index, action) in actions.into_iter().enumerate() {
                         let action_index =
@@ -191,6 +205,8 @@ async fn extract_info(client: &Client, msg: near_indexer::StreamerMessage) -> an
                             receipt_id: receipt_id.clone(),
                             receipt_index,
                             action_index,
+                            signer_id: signer_id.to_string(),
+                            signer_public_key: signer_public_key.to_string(),
                             predecessor_id: predecessor_id.clone(),
                             account_id: account_id.clone(),
                             status,
@@ -256,6 +272,16 @@ async fn extract_info(client: &Client, msg: near_indexer::StreamerMessage) -> an
                                     .as_ref()
                                     .map(|account_id| account_id.to_string())
                             }),
+                            args_new_account_id: args_data.as_ref().and_then(|args| {
+                                args.args_new_account_id
+                                    .as_ref()
+                                    .map(|new_account_id| new_account_id.to_string())
+                            }),
+                            args_owner_id: args_data.as_ref().and_then(|args| {
+                                args.args_owner_id
+                                    .as_ref()
+                                    .map(|owner_id| owner_id.to_string())
+                            }),
                             args_receiver_id: args_data.as_ref().and_then(|args| {
                                 args.receiver_id
                                     .as_ref()
@@ -272,9 +298,24 @@ async fn extract_info(client: &Client, msg: near_indexer::StreamerMessage) -> an
                             args_amount: args_data.as_ref().and_then(|args| {
                                 args.amount.as_ref().and_then(|amount| amount.parse().ok())
                             }),
+                            args_balance: args_data.as_ref().and_then(|args| {
+                                args.balance
+                                    .as_ref()
+                                    .and_then(|balance| balance.parse().ok())
+                            }),
+                            args_nft_contract_id: args_data.as_ref().and_then(|args| {
+                                args.nft_contract_id
+                                    .as_ref()
+                                    .map(|nft_contract_id| nft_contract_id.to_string())
+                            }),
+                            args_nft_token_id: args_data.as_ref().and_then(|args| {
+                                args.nft_token_id
+                                    .as_ref()
+                                    .map(|nft_token_id| nft_token_id.to_string())
+                            }),
                             return_value_int,
                         };
-                        insert.write(&row).await?;
+                        rows.push(row);
                     }
                 }
                 ReceiptEnumView::Data { .. } => {}
@@ -285,7 +326,24 @@ async fn extract_info(client: &Client, msg: near_indexer::StreamerMessage) -> an
         }
     }
 
-    insert.end().await?;
+    insert_rows_with_retry(client, &rows).await?;
+    tracing::log::info!(target: PROJECT_ID, "Inserted {} rows", rows.len());
 
     Ok(())
+}
+
+async fn insert_rows_with_retry(
+    client: &Client,
+    rows: &Vec<ActionRow>,
+) -> clickhouse::error::Result<()> {
+    let strategy = ExponentialBackoff::from_millis(100).max_delay(Duration::from_secs(30));
+    let retry_future = Retry::spawn(strategy, || async {
+        let mut insert = client.insert("actions")?;
+        for row in rows {
+            insert.write(row).await?;
+        }
+        insert.end().await
+    });
+
+    retry_future.await
 }

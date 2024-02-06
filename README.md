@@ -15,6 +15,8 @@ CREATE TABLE default.actions
     receipt_id String,
     receipt_index UInt16,
     action_index UInt8,
+    signer_id String,
+    signer_public_key String,
     predecessor_id String,
     account_id String,
     status Enum('FAILURE', 'SUCCESS'),
@@ -29,13 +31,18 @@ CREATE TABLE default.actions
     tokens_burnt UInt128,
     method_name Nullable(String),
     args_account_id Nullable(String),
+    args_new_account_id Nullable(String),
+    args_owner_id Nullable(String),
     args_receiver_id Nullable(String),
     args_sender_id Nullable(String),
     args_token_id Nullable(String),
     args_amount Nullable(UInt128),
+    args_balance Nullable(UInt128),
+    args_nft_contract_id Nullable(String),
+    args_nft_token_id Nullable(String),
     return_value_int Nullable(UInt128),
 )
-    ENGINE = MergeTree()
+    ENGINE = ReplacingMergeTree()
 PRIMARY KEY (account_id, block_timestamp)
 ORDER BY (account_id, block_timestamp, receipt_index, action_index)
 ```
