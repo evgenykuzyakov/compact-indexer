@@ -64,7 +64,6 @@ CREATE TABLE default.events
     predecessor_id String,
     account_id String,
     status Enum('FAILURE', 'SUCCESS'),
-    method_name Nullable(String),
     
     version Nullable(String),
     standard Nullable(String),

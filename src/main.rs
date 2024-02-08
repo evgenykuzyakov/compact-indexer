@@ -492,7 +492,7 @@ where
         match res().await {
             Ok(_) => Ok(()),
             Err(err) => {
-                tracing::log::error!(target: PROJECT_ID, "Error inserting rows: {}", err);
+                tracing::log::error!(target: PROJECT_ID, "Error inserting rows into \"{}\": {}", table, err);
                 Err(err)
             }
         }
