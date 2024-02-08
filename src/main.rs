@@ -27,6 +27,7 @@ fn establish_connection() -> Client {
 }
 
 const PROJECT_ID: &str = "compact_indexer";
+const EVENT_LOG_PREFIX: &str = "EVENT_JSON:";
 
 #[derive(Copy, Clone, Debug, Serialize_repr, Deserialize_repr)]
 #[repr(u8)]
@@ -88,6 +89,35 @@ pub struct ActionRow {
     pub args_utm_term: Option<String>,
     pub args_utm_content: Option<String>,
     pub return_value_int: Option<u128>,
+}
+
+#[derive(Row, Serialize)]
+pub struct EventRow {
+    pub block_height: u64,
+    pub block_hash: String,
+    pub block_timestamp: u64,
+    pub receipt_id: String,
+    pub receipt_index: u16,
+    pub log_index: u16,
+    pub signer_id: String,
+    pub signer_public_key: String,
+    pub predecessor_id: String,
+    pub account_id: String,
+    pub status: ReceiptStatus,
+
+    pub version: Option<String>,
+    pub standard: Option<String>,
+    pub event: Option<String>,
+    pub data_account_id: Option<String>,
+    pub data_owner_id: Option<String>,
+    pub data_old_owner_id: Option<String>,
+    pub data_new_owner_id: Option<String>,
+    pub data_liquidation_account_id: Option<String>,
+    pub data_authorized_id: Option<String>,
+    pub data_token_ids: Option<Vec<String>>,
+    pub data_token_id: Option<String>,
+    pub data_position: Option<String>,
+    pub data_amount: Option<u128>,
 }
 
 fn main() {
@@ -165,6 +195,7 @@ async fn extract_info(client: &Client, msg: near_indexer::StreamerMessage) -> an
     let block_timestamp = msg.block.header.timestamp_nanosec;
 
     let mut rows = vec![];
+    let mut events = vec![];
 
     let mut receipt_index: u16 = 0;
     for shard in msg.shards {
@@ -182,6 +213,7 @@ async fn extract_info(client: &Client, msg: near_indexer::StreamerMessage) -> an
                 status: execution_status,
                 gas_burnt,
                 tokens_burnt,
+                logs,
                 ..
             } = outcome.execution_outcome.outcome;
             let status = match &execution_status {
@@ -199,6 +231,79 @@ async fn extract_info(client: &Client, msg: near_indexer::StreamerMessage) -> an
                     gas_price,
                     ..
                 } => {
+                    for (log_index, log) in logs.into_iter().enumerate() {
+                        if log.starts_with(EVENT_LOG_PREFIX) {
+                            let log_index = u16::try_from(log_index).expect("Log index overflow");
+                            let event = parse_event(&log.as_str()[EVENT_LOG_PREFIX.len()..]);
+                            if let Some(event) = event {
+                                events.push(EventRow {
+                                    block_height,
+                                    block_hash: block_hash.clone(),
+                                    block_timestamp,
+                                    receipt_id: receipt_id.clone(),
+                                    receipt_index,
+                                    log_index,
+                                    signer_id: signer_id.to_string(),
+                                    signer_public_key: signer_public_key.to_string(),
+                                    predecessor_id: predecessor_id.clone(),
+                                    account_id: account_id.clone(),
+                                    status,
+
+                                    version: event.version,
+                                    standard: event.standard,
+                                    event: event.event,
+                                    data_account_id: event.data.as_ref().and_then(|data| {
+                                        data.account_id
+                                            .as_ref()
+                                            .map(|account_id| account_id.to_string())
+                                    }),
+                                    data_owner_id: event.data.as_ref().and_then(|data| {
+                                        data.owner_id.as_ref().map(|owner_id| owner_id.to_string())
+                                    }),
+                                    data_old_owner_id: event.data.as_ref().and_then(|data| {
+                                        data.old_owner_id
+                                            .as_ref()
+                                            .map(|old_owner_id| old_owner_id.to_string())
+                                    }),
+                                    data_new_owner_id: event.data.as_ref().and_then(|data| {
+                                        data.new_owner_id
+                                            .as_ref()
+                                            .map(|new_owner_id| new_owner_id.to_string())
+                                    }),
+                                    data_liquidation_account_id: event.data.as_ref().and_then(
+                                        |data| {
+                                            data.liquidation_account_id.as_ref().map(
+                                                |liquidation_account_id| {
+                                                    liquidation_account_id.to_string()
+                                                },
+                                            )
+                                        },
+                                    ),
+                                    data_authorized_id: event.data.as_ref().and_then(|data| {
+                                        data.authorized_id
+                                            .as_ref()
+                                            .map(|authorized_id| authorized_id.to_string())
+                                    }),
+                                    data_token_ids: event
+                                        .data
+                                        .as_ref()
+                                        .and_then(|data| data.token_ids.clone()),
+                                    data_token_id: event
+                                        .data
+                                        .as_ref()
+                                        .and_then(|data| data.token_id.clone()),
+                                    data_position: event
+                                        .data
+                                        .as_ref()
+                                        .and_then(|data| data.position.clone()),
+                                    data_amount: event.data.as_ref().and_then(|data| {
+                                        data.amount.as_ref().and_then(|amount| amount.parse().ok())
+                                    }),
+                                });
+                            }
+                        }
+                    }
+
                     for (action_index, action) in actions.into_iter().enumerate() {
                         let action_index =
                             u8::try_from(action_index).expect("Action index overflow");
@@ -354,19 +459,30 @@ async fn extract_info(client: &Client, msg: near_indexer::StreamerMessage) -> an
         }
     }
 
-    insert_rows_with_retry(client, &rows).await?;
-    tracing::log::info!(target: PROJECT_ID, "Inserted {} rows", rows.len());
-
+    if !rows.is_empty() {
+        insert_rows_with_retry(client, &rows, "actions").await?;
+    }
+    if !events.is_empty() {
+        insert_rows_with_retry(client, &events, "events").await?;
+    }
+    if block_height % 100 == 0 {
+        tracing::log::info!(target: PROJECT_ID, "{}#: Inserted {} actions rows", block_height, rows.len());
+        tracing::log::info!(target: PROJECT_ID, "{}#: Inserted {} events rows", block_height, events.len());
+    }
     Ok(())
 }
 
-async fn insert_rows_with_retry(
+async fn insert_rows_with_retry<T>(
     client: &Client,
-    rows: &Vec<ActionRow>,
-) -> clickhouse::error::Result<()> {
+    rows: &Vec<T>,
+    table: &str,
+) -> clickhouse::error::Result<()>
+where
+    T: Row + Serialize,
+{
     let strategy = ExponentialBackoff::from_millis(100).max_delay(Duration::from_secs(30));
     let retry_future = Retry::spawn(strategy, || async {
-        let mut insert = client.insert("actions")?;
+        let mut insert = client.insert(table)?;
         for row in rows {
             insert.write(row).await?;
         }

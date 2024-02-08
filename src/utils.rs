@@ -37,6 +37,7 @@ pub struct ArgsData {
 }
 
 const MAX_TOKEN_LENGTH: usize = 64;
+const MAX_TOKEN_IDS_LENGTH: usize = 4;
 
 fn limit_length(s: &mut Option<String>) {
     if s.as_ref().map(|s| s.len()).unwrap_or(0) > MAX_TOKEN_LENGTH {
@@ -60,4 +61,43 @@ pub fn extract_args_data(action: &ActionView) -> Option<ArgsData> {
         }
         _ => None,
     }
+}
+
+#[derive(Deserialize)]
+pub struct EventData {
+    pub account_id: Option<AccountId>,
+    pub owner_id: Option<AccountId>,
+    pub old_owner_id: Option<AccountId>,
+    pub new_owner_id: Option<AccountId>,
+    pub liquidation_account_id: Option<AccountId>,
+    pub authorized_id: Option<AccountId>,
+    pub token_ids: Option<Vec<String>>,
+    pub token_id: Option<String>,
+    pub position: Option<String>,
+    pub amount: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct Event {
+    pub version: Option<String>,
+    pub standard: Option<String>,
+    pub event: Option<String>,
+    pub data: Option<EventData>,
+}
+
+pub fn parse_event(event: &str) -> Option<Event> {
+    let mut event: Event = serde_json::from_str(&event).ok()?;
+    limit_length(&mut event.version);
+    limit_length(&mut event.standard);
+    limit_length(&mut event.event);
+    if let Some(data) = event.data.as_mut() {
+        if let Some(token_ids) = data.token_ids.as_mut() {
+            token_ids.retain(|s| s.len() <= MAX_TOKEN_LENGTH);
+            if token_ids.len() > MAX_TOKEN_IDS_LENGTH {
+                token_ids.resize(MAX_TOKEN_IDS_LENGTH, "".to_string());
+            }
+        }
+        limit_length(&mut data.token_id);
+    }
+    Some(event)
 }

@@ -50,6 +50,39 @@ CREATE TABLE default.actions
     ENGINE = ReplacingMergeTree()
 PRIMARY KEY (account_id, block_timestamp)
 ORDER BY (account_id, block_timestamp, receipt_index, action_index)
+
+CREATE TABLE default.events
+(
+    block_height UInt64,
+    block_hash String,
+    block_timestamp DateTime64(9, 'UTC'),
+    receipt_id String,
+    receipt_index UInt16,
+    log_index UInt16,
+    signer_id String,
+    signer_public_key String,
+    predecessor_id String,
+    account_id String,
+    status Enum('FAILURE', 'SUCCESS'),
+    method_name Nullable(String),
+    
+    version Nullable(String),
+    standard Nullable(String),
+    event Nullable(String),
+    data_account_id Nullable(String),
+    data_owner_id Nullable(String),
+    data_old_owner_id Nullable(String),
+    data_new_owner_id Nullable(String),
+    data_liquidation_account_id Nullable(String),
+    data_authorized_id Nullable(String),
+    data_token_ids Array(String),
+    data_token_id Nullable(String),
+    data_position Nullable(String),
+    data_amount Nullable(UInt128),
+)
+    ENGINE = ReplacingMergeTree()
+PRIMARY KEY (account_id, block_timestamp)
+ORDER BY (account_id, block_timestamp, receipt_index, action_index)
 ```
 
 ## To run
