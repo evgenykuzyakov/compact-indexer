@@ -82,7 +82,7 @@ CREATE TABLE default.events
 )
     ENGINE = ReplacingMergeTree()
 PRIMARY KEY (account_id, block_timestamp)
-ORDER BY (account_id, block_timestamp, receipt_index, action_index)
+ORDER BY (account_id, block_timestamp, receipt_index, log_index)
 ```
 
 ## To run

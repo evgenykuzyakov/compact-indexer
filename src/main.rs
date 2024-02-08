@@ -176,7 +176,7 @@ fn main() {
             });
             sys.run().unwrap();
         }
-        _ => panic!("You have to pass `init` or `run` arg"),
+        _ => panic!("You have to pass `run` arg"),
     }
 }
 
@@ -482,11 +482,20 @@ where
 {
     let strategy = ExponentialBackoff::from_millis(100).max_delay(Duration::from_secs(30));
     let retry_future = Retry::spawn(strategy, || async {
-        let mut insert = client.insert(table)?;
-        for row in rows {
-            insert.write(row).await?;
+        let res = || async {
+            let mut insert = client.insert(table)?;
+            for row in rows {
+                insert.write(row).await?;
+            }
+            insert.end().await
+        };
+        match res().await {
+            Ok(_) => Ok(()),
+            Err(err) => {
+                tracing::log::error!(target: PROJECT_ID, "Error inserting rows: {}", err);
+                Err(err)
+            }
         }
-        insert.end().await
     });
 
     retry_future.await
