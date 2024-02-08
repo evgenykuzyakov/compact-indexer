@@ -82,7 +82,7 @@ pub struct Event {
     pub version: Option<String>,
     pub standard: Option<String>,
     pub event: Option<String>,
-    pub data: Option<EventData>,
+    pub data: Option<Vec<EventData>>,
 }
 
 pub fn parse_event(event: &str) -> Option<Event> {
@@ -90,7 +90,7 @@ pub fn parse_event(event: &str) -> Option<Event> {
     limit_length(&mut event.version);
     limit_length(&mut event.standard);
     limit_length(&mut event.event);
-    if let Some(data) = event.data.as_mut() {
+    if let Some(data) = event.data.as_mut().and_then(|data| data.get_mut(0)) {
         if let Some(token_ids) = data.token_ids.as_mut() {
             token_ids.retain(|s| s.len() <= MAX_TOKEN_LENGTH);
             if token_ids.len() > MAX_TOKEN_IDS_LENGTH {

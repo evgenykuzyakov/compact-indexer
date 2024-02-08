@@ -235,72 +235,60 @@ async fn extract_info(client: &Client, msg: near_indexer::StreamerMessage) -> an
                         if log.starts_with(EVENT_LOG_PREFIX) {
                             let log_index = u16::try_from(log_index).expect("Log index overflow");
                             let event = parse_event(&log.as_str()[EVENT_LOG_PREFIX.len()..]);
-                            if let Some(event) = event {
-                                events.push(EventRow {
-                                    block_height,
-                                    block_hash: block_hash.clone(),
-                                    block_timestamp,
-                                    receipt_id: receipt_id.clone(),
-                                    receipt_index,
-                                    log_index,
-                                    signer_id: signer_id.to_string(),
-                                    signer_public_key: signer_public_key.to_string(),
-                                    predecessor_id: predecessor_id.clone(),
-                                    account_id: account_id.clone(),
-                                    status,
+                            if let Some(mut event) = event {
+                                let data = event.data.take().map(|mut data| data.remove(0));
+                                if let Some(data) = data {
+                                    events.push(EventRow {
+                                        block_height,
+                                        block_hash: block_hash.clone(),
+                                        block_timestamp,
+                                        receipt_id: receipt_id.clone(),
+                                        receipt_index,
+                                        log_index,
+                                        signer_id: signer_id.to_string(),
+                                        signer_public_key: signer_public_key.to_string(),
+                                        predecessor_id: predecessor_id.clone(),
+                                        account_id: account_id.clone(),
+                                        status,
 
-                                    version: event.version,
-                                    standard: event.standard,
-                                    event: event.event,
-                                    data_account_id: event.data.as_ref().and_then(|data| {
-                                        data.account_id
+                                        version: event.version,
+                                        standard: event.standard,
+                                        event: event.event,
+                                        data_account_id: data
+                                            .account_id
                                             .as_ref()
-                                            .map(|account_id| account_id.to_string())
-                                    }),
-                                    data_owner_id: event.data.as_ref().and_then(|data| {
-                                        data.owner_id.as_ref().map(|owner_id| owner_id.to_string())
-                                    }),
-                                    data_old_owner_id: event.data.as_ref().and_then(|data| {
-                                        data.old_owner_id
+                                            .map(|account_id| account_id.to_string()),
+                                        data_owner_id: data
+                                            .owner_id
                                             .as_ref()
-                                            .map(|old_owner_id| old_owner_id.to_string())
-                                    }),
-                                    data_new_owner_id: event.data.as_ref().and_then(|data| {
-                                        data.new_owner_id
+                                            .map(|owner_id| owner_id.to_string()),
+                                        data_old_owner_id: data
+                                            .old_owner_id
                                             .as_ref()
-                                            .map(|new_owner_id| new_owner_id.to_string())
-                                    }),
-                                    data_liquidation_account_id: event.data.as_ref().and_then(
-                                        |data| {
-                                            data.liquidation_account_id.as_ref().map(
-                                                |liquidation_account_id| {
-                                                    liquidation_account_id.to_string()
-                                                },
-                                            )
-                                        },
-                                    ),
-                                    data_authorized_id: event.data.as_ref().and_then(|data| {
-                                        data.authorized_id
+                                            .map(|old_owner_id| old_owner_id.to_string()),
+                                        data_new_owner_id: data
+                                            .new_owner_id
                                             .as_ref()
-                                            .map(|authorized_id| authorized_id.to_string())
-                                    }),
-                                    data_token_ids: event
-                                        .data
-                                        .as_ref()
-                                        .and_then(|data| data.token_ids.clone())
-                                        .unwrap_or_default(),
-                                    data_token_id: event
-                                        .data
-                                        .as_ref()
-                                        .and_then(|data| data.token_id.clone()),
-                                    data_position: event
-                                        .data
-                                        .as_ref()
-                                        .and_then(|data| data.position.clone()),
-                                    data_amount: event.data.as_ref().and_then(|data| {
-                                        data.amount.as_ref().and_then(|amount| amount.parse().ok())
-                                    }),
-                                });
+                                            .map(|new_owner_id| new_owner_id.to_string()),
+                                        data_liquidation_account_id: data
+                                            .liquidation_account_id
+                                            .as_ref()
+                                            .map(|liquidation_account_id| {
+                                                liquidation_account_id.to_string()
+                                            }),
+                                        data_authorized_id: data
+                                            .authorized_id
+                                            .as_ref()
+                                            .map(|authorized_id| authorized_id.to_string()),
+                                        data_token_ids: data.token_ids.clone().unwrap_or_default(),
+                                        data_token_id: data.token_id,
+                                        data_position: data.position,
+                                        data_amount: data
+                                            .amount
+                                            .as_ref()
+                                            .and_then(|amount| amount.parse().ok()),
+                                    });
+                                }
                             }
                         }
                     }
@@ -467,8 +455,7 @@ async fn extract_info(client: &Client, msg: near_indexer::StreamerMessage) -> an
         insert_rows_with_retry(client, &events, "events").await?;
     }
     if block_height % 100 == 0 {
-        tracing::log::info!(target: PROJECT_ID, "{}#: Inserted {} actions rows", block_height, rows.len());
-        tracing::log::info!(target: PROJECT_ID, "{}#: Inserted {} events rows", block_height, events.len());
+        tracing::log::info!(target: PROJECT_ID, "#{}: Inserted {} actions and {} events", block_height, rows.len(), events.len());
     }
     Ok(())
 }
