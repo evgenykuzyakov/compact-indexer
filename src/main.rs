@@ -114,7 +114,7 @@ pub struct EventRow {
     pub data_new_owner_id: Option<String>,
     pub data_liquidation_account_id: Option<String>,
     pub data_authorized_id: Option<String>,
-    pub data_token_ids: Option<Vec<String>>,
+    pub data_token_ids: Vec<String>,
     pub data_token_id: Option<String>,
     pub data_position: Option<String>,
     pub data_amount: Option<u128>,
@@ -287,7 +287,8 @@ async fn extract_info(client: &Client, msg: near_indexer::StreamerMessage) -> an
                                     data_token_ids: event
                                         .data
                                         .as_ref()
-                                        .and_then(|data| data.token_ids.clone()),
+                                        .and_then(|data| data.token_ids.clone())
+                                        .unwrap_or_default(),
                                     data_token_id: event
                                         .data
                                         .as_ref()
