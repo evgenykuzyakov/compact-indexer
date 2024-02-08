@@ -82,6 +82,11 @@ pub struct ActionRow {
     pub args_balance: Option<u128>,
     pub args_nft_contract_id: Option<String>,
     pub args_nft_token_id: Option<String>,
+    pub args_utm_source: Option<String>,
+    pub args_utm_medium: Option<String>,
+    pub args_utm_campaign: Option<String>,
+    pub args_utm_term: Option<String>,
+    pub args_utm_content: Option<String>,
     pub return_value_int: Option<u128>,
 }
 
@@ -312,6 +317,29 @@ async fn extract_info(client: &Client, msg: near_indexer::StreamerMessage) -> an
                                 args.nft_token_id
                                     .as_ref()
                                     .map(|nft_token_id| nft_token_id.to_string())
+                            }),
+                            args_utm_source: args_data.as_ref().and_then(|args| {
+                                args.utm_source
+                                    .as_ref()
+                                    .map(|utm_source| utm_source.to_string())
+                            }),
+                            args_utm_medium: args_data.as_ref().and_then(|args| {
+                                args.utm_medium
+                                    .as_ref()
+                                    .map(|utm_medium| utm_medium.to_string())
+                            }),
+                            args_utm_campaign: args_data.as_ref().and_then(|args| {
+                                args.utm_campaign
+                                    .as_ref()
+                                    .map(|utm_campaign| utm_campaign.to_string())
+                            }),
+                            args_utm_term: args_data.as_ref().and_then(|args| {
+                                args.utm_term.as_ref().map(|utm_term| utm_term.to_string())
+                            }),
+                            args_utm_content: args_data.as_ref().and_then(|args| {
+                                args.utm_content
+                                    .as_ref()
+                                    .map(|utm_content| utm_content.to_string())
                             }),
                             return_value_int,
                         };

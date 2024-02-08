@@ -6,7 +6,7 @@ Indexes NEAR blockchain actions and store them in a ClickHouse DB.
 
 ```sql
 -- This is a ClickHouse table.
--- receipt_index is an index of a receipt within a block. It doesn't have significance.
+-- receipt_index is an index of a receipt within a block. It's used for deduplication of actions.
 CREATE TABLE default.actions
 (
     block_height UInt64,
@@ -40,6 +40,11 @@ CREATE TABLE default.actions
     args_balance Nullable(UInt128),
     args_nft_contract_id Nullable(String),
     args_nft_token_id Nullable(String),
+    args_utm_source Nullable(String),
+    args_utm_medium Nullable(String),
+    args_utm_campaign Nullable(String),
+    args_utm_term Nullable(String),
+    args_utm_content Nullable(String),
     return_value_int Nullable(UInt128),
 )
     ENGINE = ReplacingMergeTree()
