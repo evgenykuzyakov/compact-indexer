@@ -11,7 +11,6 @@ use std::collections::HashMap;
 use std::io::Read;
 use std::{env, fs};
 use tokio::sync::mpsc;
-use walkdir::WalkDir;
 
 const PROJECT_ID: &str = "lake_indexer";
 const BLOCK_FOLDER: &str = "block";
@@ -61,16 +60,17 @@ pub async fn start(config: Config, blocks_sink: mpsc::Sender<StreamerMessage>) {
 
     for block_height in config.from_block..config.to_block {
         tracing::log::debug!(target: PROJECT_ID, "Processing block: {}", block_height);
-        let padded_block_height = format!("{:0>12}", block_height / 5 * 5);
+        let rounded_padded_block_height = format!("{:0>12}", block_height / 5 * 5);
+        let padded_block_height = format!("{:0>12}", block_height);
         let expected_sub_path = format!(
             "{}/{}/{}.tgz",
-            &padded_block_height[..6],
-            &padded_block_height[6..9],
-            padded_block_height
+            &rounded_padded_block_height[..6],
+            &rounded_padded_block_height[6..9],
+            rounded_padded_block_height
         );
         let block_path = format!("{}/{}/{}", config.path, BLOCK_FOLDER, expected_sub_path);
         if block_path != current_block_file {
-            tracing::log::info!(target: PROJECT_ID, "Reading block: {}", block_path);
+            tracing::log::debug!(target: PROJECT_ID, "Reading block: {}", block_path);
             current_block_file = block_path;
             block_entries = read_archive(&current_block_file);
             shard_entries = shards
@@ -83,7 +83,7 @@ pub async fn start(config: Config, blocks_sink: mpsc::Sender<StreamerMessage>) {
         }
         let block_str = block_entries.get(&format!("{}.json", padded_block_height));
         if block_str.is_none() {
-            tracing::log::info!(target: PROJECT_ID, "Block not found: {}", block_height);
+            tracing::log::debug!(target: PROJECT_ID, "Block not found: {}", block_height);
             continue;
         }
         let block = serde_json::from_str(&block_str.unwrap()).unwrap();
@@ -114,8 +114,8 @@ fn main() {
     let client = establish_connection();
 
     let config = Config {
-        from_block: 9_820_200,
-        to_block: 9_820_300,
+        from_block: 9_820_210,
+        to_block: 10_000_000,
         path: env::var("LAKE_DATA_PATH").unwrap(),
     };
 
@@ -131,7 +131,7 @@ fn main() {
 
 async fn listen_blocks(mut stream: mpsc::Receiver<StreamerMessage>, client: Client) {
     while let Some(streamer_message) = stream.recv().await {
-        tracing::log::info!(target: PROJECT_ID, "Received streamer message: {:?}", streamer_message);
-        //extract_info(&client, streamer_message).await.unwrap();
+        tracing::log::debug!(target: PROJECT_ID, "Received streamer message: {:?}", streamer_message);
+        extract_info(&client, streamer_message).await.unwrap();
     }
 }

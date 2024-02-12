@@ -13,6 +13,7 @@ use near_indexer::near_primitives::hash::CryptoHash;
 use serde::Serialize;
 
 use std::convert::TryFrom;
+use std::sync::atomic::AtomicUsize;
 use std::time::Duration;
 use tokio_retry::{strategy::ExponentialBackoff, Retry};
 
@@ -117,6 +118,8 @@ pub fn establish_connection() -> Client {
         .with_password(env::var("DATABASE_PASSWORD").unwrap())
         .with_database(env::var("DATABASE_DATABASE").unwrap())
 }
+
+static COUNTER: AtomicUsize = AtomicUsize::new(0);
 
 pub async fn extract_info(
     client: &Client,
@@ -386,7 +389,7 @@ pub async fn extract_info(
     if !events.is_empty() {
         insert_rows_with_retry(client, &events, "events").await?;
     }
-    if block_height % 100 == 0 {
+    if block_height % 1000 == 0 {
         tracing::log::info!(target: CLICKHOUSE_TARGET, "#{}: Inserted {} actions and {} events", block_height, rows.len(), events.len());
     }
     Ok(())
