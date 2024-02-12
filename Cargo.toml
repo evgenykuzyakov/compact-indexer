@@ -1,9 +1,17 @@
 [package]
 name = "compact-indexer"
-version = "0.3.1"
+version = "0.4.0"
 authors = ["Eugene The Dream"]
 rust-version = "1.71.0"
 edition = "2021"
+
+[[bin]]
+name = "compact-indexer"
+path = "src/bin/node.rs"
+
+[[bin]]
+name = "lake-indexer"
+path = "src/bin/lake.rs"
 
 [dependencies]
 actix = "=0.13.0"

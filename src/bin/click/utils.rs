@@ -1,5 +1,5 @@
-use crate::*;
 use near_indexer::near_primitives::types::AccountId;
+use near_indexer::near_primitives::views::{ActionView, ExecutionStatusView};
 use serde::Deserialize;
 
 pub fn extract_return_value_int(execution_status: ExecutionStatusView) -> Option<u128> {

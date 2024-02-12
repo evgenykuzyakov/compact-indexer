@@ -1,8 +1,6 @@
 use clickhouse::{Client, Row};
 use dotenv::dotenv;
 use serde::Serialize;
-use serde_repr::{Deserialize_repr, Serialize_repr};
-use std::convert::TryFrom;
 use std::env;
 use tracing_subscriber::EnvFilter;
 
