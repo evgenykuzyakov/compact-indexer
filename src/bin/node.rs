@@ -1,9 +1,9 @@
 mod click;
+mod common;
 
 use click::*;
 use clickhouse::Client;
 use dotenv::dotenv;
-use tracing_subscriber::EnvFilter;
 
 const PROJECT_ID: &str = "compact_indexer";
 
@@ -14,30 +14,9 @@ fn main() {
     let args: Vec<String> = std::env::args().collect();
     let home_dir = std::path::PathBuf::from(near_indexer::get_default_home());
 
-    let mut env_filter = EnvFilter::new(
-        "clickhouse=info,tokio_reactor=info,near=info,stats=info,telemetry=info,indexer=info,aggregated=info,compact_indexer=info",
-    );
+    common::setup_tracing("clickhouse=info,tokio_reactor=info,near=info,stats=info,telemetry=info,indexer=info,aggregated=info,compact_indexer=info");
 
-    if let Ok(rust_log) = std::env::var("RUST_LOG") {
-        if !rust_log.is_empty() {
-            for directive in rust_log.split(',').filter_map(|s| match s.parse() {
-                Ok(directive) => Some(directive),
-                Err(err) => {
-                    eprintln!("Ignoring directive `{}`: {}", s, err);
-                    None
-                }
-            }) {
-                env_filter = env_filter.add_directive(directive);
-            }
-        }
-    }
-
-    tracing_subscriber::fmt::Subscriber::builder()
-        .with_env_filter(env_filter)
-        .with_writer(std::io::stderr)
-        .init();
-
-    tracing::log::info!(target: PROJECT_ID, "Starting indexer",);
+    tracing::log::info!(target: PROJECT_ID, "Starting indexer");
 
     let command = args
         .get(1)
