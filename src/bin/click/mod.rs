@@ -13,12 +13,12 @@ use near_indexer::near_primitives::hash::CryptoHash;
 use serde::Serialize;
 
 use std::convert::TryFrom;
-use std::sync::atomic::AtomicUsize;
 use std::time::Duration;
 use tokio_retry::{strategy::ExponentialBackoff, Retry};
 
 const CLICKHOUSE_TARGET: &str = "clickhouse";
 const EVENT_LOG_PREFIX: &str = "EVENT_JSON:";
+const MIN_BATCH: usize = 1000;
 
 #[derive(Copy, Clone, Debug, Serialize_repr, Deserialize_repr)]
 #[repr(u8)]
@@ -111,7 +111,41 @@ pub struct EventRow {
     pub data_amount: Option<u128>,
 }
 
-pub fn establish_connection() -> Client {
+pub struct DB {
+    pub client: Client,
+    pub actions: Vec<ActionRow>,
+    pub events: Vec<EventRow>,
+}
+
+impl DB {
+    pub fn new() -> Self {
+        Self {
+            client: establish_connection(),
+            actions: Vec::new(),
+            events: Vec::new(),
+        }
+    }
+
+    pub async fn commit(&mut self) -> clickhouse::error::Result<()> {
+        self.commit_actions().await?;
+        self.commit_events().await?;
+        Ok(())
+    }
+
+    pub async fn commit_actions(&mut self) -> clickhouse::error::Result<()> {
+        insert_rows_with_retry(&self.client, &self.actions, "actions").await?;
+        self.actions.clear();
+        Ok(())
+    }
+
+    pub async fn commit_events(&mut self) -> clickhouse::error::Result<()> {
+        insert_rows_with_retry(&self.client, &self.events, "events").await?;
+        self.events.clear();
+        Ok(())
+    }
+}
+
+fn establish_connection() -> Client {
     Client::default()
         .with_url(env::var("DATABASE_URL").unwrap())
         .with_user(env::var("DATABASE_USER").unwrap())
@@ -119,18 +153,10 @@ pub fn establish_connection() -> Client {
         .with_database(env::var("DATABASE_DATABASE").unwrap())
 }
 
-static COUNTER: AtomicUsize = AtomicUsize::new(0);
-
-pub async fn extract_info(
-    client: &Client,
-    msg: near_indexer::StreamerMessage,
-) -> anyhow::Result<()> {
+pub async fn extract_info(db: &mut DB, msg: near_indexer::StreamerMessage) -> anyhow::Result<()> {
     let block_height = msg.block.header.height;
     let block_hash = msg.block.header.hash.to_string();
     let block_timestamp = msg.block.header.timestamp_nanosec;
-
-    let mut rows = vec![];
-    let mut events = vec![];
 
     let mut receipt_index: u16 = 0;
     for shard in msg.shards {
@@ -173,7 +199,7 @@ pub async fn extract_info(
                             if let Some(mut event) = event {
                                 let data = event.data.take().map(|mut data| data.remove(0));
                                 if let Some(data) = data {
-                                    events.push(EventRow {
+                                    db.events.push(EventRow {
                                         block_height,
                                         block_hash: block_hash.clone(),
                                         block_timestamp,
@@ -372,7 +398,7 @@ pub async fn extract_info(
                             }),
                             return_value_int,
                         };
-                        rows.push(row);
+                        db.actions.push(row);
                     }
                 }
                 ReceiptEnumView::Data { .. } => {}
@@ -383,14 +409,14 @@ pub async fn extract_info(
         }
     }
 
-    if !rows.is_empty() {
-        insert_rows_with_retry(client, &rows, "actions").await?;
-    }
-    if !events.is_empty() {
-        insert_rows_with_retry(client, &events, "events").await?;
-    }
     if block_height % 1000 == 0 {
-        tracing::log::info!(target: CLICKHOUSE_TARGET, "#{}: Inserted {} actions and {} events", block_height, rows.len(), events.len());
+        tracing::log::info!(target: CLICKHOUSE_TARGET, "#{}: Having {} actions and {} events", block_height, db.actions.len(), db.events.len());
+    }
+    if db.actions.len() >= MIN_BATCH {
+        db.commit_actions().await?;
+    }
+    if db.events.len() >= MIN_BATCH {
+        db.commit_events().await?;
     }
     Ok(())
 }

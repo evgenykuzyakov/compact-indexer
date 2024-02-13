@@ -2,7 +2,6 @@ mod click;
 mod common;
 
 use click::*;
-use clickhouse::Client;
 use dotenv::dotenv;
 
 const PROJECT_ID: &str = "compact_indexer";
@@ -25,7 +24,7 @@ fn main() {
 
     match command {
         "run" => {
-            let client = establish_connection();
+            let db = DB::new();
             let indexer_config = near_indexer::IndexerConfig {
                 home_dir,
                 sync_mode: near_indexer::SyncModeEnum::FromInterruption,
@@ -36,7 +35,7 @@ fn main() {
             sys.block_on(async move {
                 let indexer = near_indexer::Indexer::new(indexer_config).unwrap();
                 let stream = indexer.streamer();
-                listen_blocks(stream, client).await;
+                listen_blocks(stream, db).await;
 
                 actix::System::current().stop();
             });
@@ -48,9 +47,10 @@ fn main() {
 
 async fn listen_blocks(
     mut stream: tokio::sync::mpsc::Receiver<near_indexer::StreamerMessage>,
-    client: Client,
+    mut db: DB,
 ) {
     while let Some(streamer_message) = stream.recv().await {
-        extract_info(&client, streamer_message).await.unwrap();
+        extract_info(&mut db, streamer_message).await.unwrap();
     }
+    db.commit().await.unwrap();
 }

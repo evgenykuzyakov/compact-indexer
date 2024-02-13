@@ -2,7 +2,6 @@ mod click;
 mod common;
 
 use click::*;
-use clickhouse::Client;
 use dotenv::dotenv;
 use flate2::read::GzDecoder;
 use near_indexer::near_primitives::types::BlockHeight;
@@ -111,27 +110,28 @@ fn main() {
 
     tracing::log::info!(target: PROJECT_ID, "Starting NEAR Lake Indexer");
 
-    let client = establish_connection();
+    let db = DB::new();
 
     let config = Config {
         from_block: 9_820_210,
-        to_block: 10_000_000,
+        to_block: 112_416_927,
         path: env::var("LAKE_DATA_PATH").unwrap(),
     };
 
     let sys = actix::System::new();
     sys.block_on(async move {
         let stream = streamer(config);
-        listen_blocks(stream, client).await;
+        listen_blocks(stream, db).await;
 
         actix::System::current().stop();
     });
     sys.run().unwrap();
 }
 
-async fn listen_blocks(mut stream: mpsc::Receiver<StreamerMessage>, client: Client) {
+async fn listen_blocks(mut stream: mpsc::Receiver<StreamerMessage>, mut db: DB) {
     while let Some(streamer_message) = stream.recv().await {
         tracing::log::debug!(target: PROJECT_ID, "Received streamer message: {:?}", streamer_message);
-        extract_info(&client, streamer_message).await.unwrap();
+        extract_info(&mut db, streamer_message).await.unwrap();
     }
+    db.commit().await.unwrap();
 }
