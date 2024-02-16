@@ -18,7 +18,7 @@ use tokio_retry::{strategy::ExponentialBackoff, Retry};
 
 const CLICKHOUSE_TARGET: &str = "clickhouse";
 const EVENT_LOG_PREFIX: &str = "EVENT_JSON:";
-const MIN_BATCH: usize = 1000;
+const MIN_BATCH: usize = 20000;
 
 #[derive(Copy, Clone, Debug, Serialize_repr, Deserialize_repr)]
 #[repr(u8)]
