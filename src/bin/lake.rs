@@ -110,7 +110,7 @@ fn main() {
 
     tracing::log::info!(target: PROJECT_ID, "Starting NEAR Lake Indexer");
 
-    let db = DB::new();
+    let db = DB::new(20_000);
 
     let config = Config {
         from_block: 9_820_210,

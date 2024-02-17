@@ -18,7 +18,6 @@ use tokio_retry::{strategy::ExponentialBackoff, Retry};
 
 const CLICKHOUSE_TARGET: &str = "clickhouse";
 const EVENT_LOG_PREFIX: &str = "EVENT_JSON:";
-const MIN_BATCH: usize = 20000;
 
 #[derive(Copy, Clone, Debug, Serialize_repr, Deserialize_repr)]
 #[repr(u8)]
@@ -115,14 +114,16 @@ pub struct DB {
     pub client: Client,
     pub actions: Vec<ActionRow>,
     pub events: Vec<EventRow>,
+    pub min_batch: usize,
 }
 
 impl DB {
-    pub fn new() -> Self {
+    pub fn new(min_batch: usize) -> Self {
         Self {
             client: establish_connection(),
             actions: Vec::new(),
             events: Vec::new(),
+            min_batch,
         }
     }
 
@@ -412,10 +413,10 @@ pub async fn extract_info(db: &mut DB, msg: near_indexer::StreamerMessage) -> an
     if block_height % 1000 == 0 {
         tracing::log::info!(target: CLICKHOUSE_TARGET, "#{}: Having {} actions and {} events", block_height, db.actions.len(), db.events.len());
     }
-    if db.actions.len() >= MIN_BATCH {
+    if db.actions.len() >= db.min_batch {
         db.commit_actions().await?;
     }
-    if db.events.len() >= MIN_BATCH {
+    if db.events.len() >= db.min_batch {
         db.commit_events().await?;
     }
     Ok(())

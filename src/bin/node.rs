@@ -24,7 +24,7 @@ fn main() {
 
     match command {
         "run" => {
-            let db = DB::new();
+            let db = DB::new(1);
             let indexer_config = near_indexer::IndexerConfig {
                 home_dir,
                 sync_mode: near_indexer::SyncModeEnum::FromInterruption,
