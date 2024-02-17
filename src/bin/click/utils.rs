@@ -98,6 +98,8 @@ pub fn parse_event(event: &str) -> Option<Event> {
             }
         }
         limit_length(&mut data.token_id);
+    } else {
+        event.data = None;
     }
     Some(event)
 }
