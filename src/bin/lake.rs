@@ -113,8 +113,14 @@ fn main() {
     let db = DB::new(20_000);
 
     let config = Config {
-        from_block: 9_820_210,
-        to_block: 112_416_927,
+        from_block: env::var("FROM_BLOCK")
+            .expect("FROM_BLOCK is required")
+            .parse()
+            .unwrap(),
+        to_block: env::var("TO_BLOCK")
+            .expect("TO_BLOCK (exclusive) is required")
+            .parse()
+            .unwrap(),
         path: env::var("LAKE_DATA_PATH").unwrap(),
     };
 
