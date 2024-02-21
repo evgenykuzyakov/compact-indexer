@@ -164,10 +164,10 @@ fn establish_connection() -> Client {
         .with_database(env::var("DATABASE_DATABASE").unwrap())
 }
 
-pub async fn extract_info(
-    db: &mut ClickDB,
-    msg: near_indexer::StreamerMessage,
-) -> anyhow::Result<()> {
+pub fn extract_rows(msg: near_indexer::StreamerMessage) -> (Vec<ActionRow>, Vec<EventRow>) {
+    let mut action_rows = vec![];
+    let mut event_rows = vec![];
+
     let block_height = msg.block.header.height;
     let block_hash = msg.block.header.hash.to_string();
     let block_timestamp = msg.block.header.timestamp_nanosec;
@@ -213,7 +213,7 @@ pub async fn extract_info(
                             if let Some(mut event) = event {
                                 let data = event.data.take().map(|mut data| data.remove(0));
                                 if let Some(data) = data {
-                                    db.events.push(EventRow {
+                                    event_rows.push(EventRow {
                                         block_height,
                                         block_hash: block_hash.clone(),
                                         block_timestamp,
@@ -412,7 +412,7 @@ pub async fn extract_info(
                             }),
                             return_value_int,
                         };
-                        db.actions.push(row);
+                        action_rows.push(row);
                     }
                 }
                 ReceiptEnumView::Data { .. } => {}
@@ -422,6 +422,17 @@ pub async fn extract_info(
                 .expect("Receipt index overflow");
         }
     }
+    (action_rows, event_rows)
+}
+
+pub async fn extract_info(
+    db: &mut ClickDB,
+    msg: near_indexer::StreamerMessage,
+) -> anyhow::Result<()> {
+    let block_height = msg.block.header.height;
+    let (actions, events) = extract_rows(msg);
+    db.actions.extend(actions);
+    db.events.extend(events);
 
     if block_height % 1000 == 0 {
         tracing::log::info!(target: CLICKHOUSE_TARGET, "#{}: Having {} actions and {} events", block_height, db.actions.len(), db.events.len());
