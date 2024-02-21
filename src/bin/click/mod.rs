@@ -12,6 +12,7 @@ use utils::*;
 use near_indexer::near_primitives::hash::CryptoHash;
 use serde::Serialize;
 
+use near_indexer::near_primitives::types::BlockHeight;
 use std::convert::TryFrom;
 use std::time::Duration;
 use tokio_retry::{strategy::ExponentialBackoff, Retry};
@@ -110,14 +111,14 @@ pub struct EventRow {
     pub data_amount: Option<u128>,
 }
 
-pub struct DB {
+pub struct ClickDB {
     pub client: Client,
     pub actions: Vec<ActionRow>,
     pub events: Vec<EventRow>,
     pub min_batch: usize,
 }
 
-impl DB {
+impl ClickDB {
     pub fn new(min_batch: usize) -> Self {
         Self {
             client: establish_connection(),
@@ -144,6 +145,15 @@ impl DB {
         self.events.clear();
         Ok(())
     }
+
+    pub async fn last_block_height(&self) -> clickhouse::error::Result<Option<BlockHeight>> {
+        let block_height = self
+            .client
+            .query("SELECT max(block_height) FROM actions")
+            .fetch_one::<u64>()
+            .await?;
+        Ok(Some(block_height))
+    }
 }
 
 fn establish_connection() -> Client {
@@ -154,7 +164,10 @@ fn establish_connection() -> Client {
         .with_database(env::var("DATABASE_DATABASE").unwrap())
 }
 
-pub async fn extract_info(db: &mut DB, msg: near_indexer::StreamerMessage) -> anyhow::Result<()> {
+pub async fn extract_info(
+    db: &mut ClickDB,
+    msg: near_indexer::StreamerMessage,
+) -> anyhow::Result<()> {
     let block_height = msg.block.header.height;
     let block_hash = msg.block.header.hash.to_string();
     let block_timestamp = msg.block.header.timestamp_nanosec;

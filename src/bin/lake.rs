@@ -15,9 +15,9 @@ const PROJECT_ID: &str = "lake_indexer";
 const BLOCK_FOLDER: &str = "block";
 
 pub struct Config {
-    from_block: BlockHeight,
-    to_block: BlockHeight,
-    path: String,
+    pub from_block: BlockHeight,
+    pub to_block: BlockHeight,
+    pub path: String,
 }
 
 fn read_folder(path: &str) -> Vec<String> {
@@ -110,7 +110,7 @@ fn main() {
 
     tracing::log::info!(target: PROJECT_ID, "Starting NEAR Lake Indexer");
 
-    let db = DB::new(20_000);
+    let db = ClickDB::new(20_000);
 
     let config = Config {
         from_block: env::var("FROM_BLOCK")
@@ -134,7 +134,7 @@ fn main() {
     sys.run().unwrap();
 }
 
-async fn listen_blocks(mut stream: mpsc::Receiver<StreamerMessage>, mut db: DB) {
+async fn listen_blocks(mut stream: mpsc::Receiver<StreamerMessage>, mut db: ClickDB) {
     while let Some(streamer_message) = stream.recv().await {
         tracing::log::debug!(target: PROJECT_ID, "Received streamer message: {:?}", streamer_message);
         extract_info(&mut db, streamer_message).await.unwrap();

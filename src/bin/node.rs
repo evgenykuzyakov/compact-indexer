@@ -24,7 +24,7 @@ fn main() {
 
     match command {
         "run" => {
-            let db = DB::new(1);
+            let db = ClickDB::new(1);
             let indexer_config = near_indexer::IndexerConfig {
                 home_dir,
                 sync_mode: near_indexer::SyncModeEnum::FromInterruption,
@@ -47,7 +47,7 @@ fn main() {
 
 async fn listen_blocks(
     mut stream: tokio::sync::mpsc::Receiver<near_indexer::StreamerMessage>,
-    mut db: DB,
+    mut db: ClickDB,
 ) {
     while let Some(streamer_message) = stream.recv().await {
         extract_info(&mut db, streamer_message).await.unwrap();

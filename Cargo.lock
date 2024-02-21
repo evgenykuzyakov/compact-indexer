@@ -1130,6 +1130,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "acbf1af155f9b9ef647e42cdc158db4b64a1b61f743629225fde6f3e0be2a7c7"
 
 [[package]]
+name = "combine"
+version = "4.6.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "35ed6e9d84f0b51a7f52daf1c7d71dd136fd7a3f41a8462b8cdb8c78d920fad4"
+dependencies = [
+ "bytes",
+ "futures-core",
+ "memchr",
+ "pin-project-lite",
+ "tokio",
+ "tokio-util 0.7.10",
+]
+
+[[package]]
 name = "compact-indexer"
 version = "0.4.0"
 dependencies = [
@@ -1145,8 +1159,10 @@ dependencies = [
  "clickhouse",
  "dotenv",
  "flate2",
+ "itertools 0.12.1",
  "near-indexer",
  "openssl-probe",
+ "redis",
  "serde",
  "serde_json",
  "serde_repr",
@@ -1339,7 +1355,7 @@ dependencies = [
  "cranelift-codegen",
  "cranelift-entity",
  "cranelift-frontend",
- "itertools",
+ "itertools 0.10.5",
  "log",
  "smallvec",
  "wasmparser 0.103.0",
@@ -2461,6 +2477,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "itertools"
+version = "0.12.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ba291022dbbd398a455acf126c1e341954079855bc60dfdda641363bd6922569"
+dependencies = [
+ "either",
+]
+
+[[package]]
 name = "itoa"
 version = "1.0.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2961,7 +2986,7 @@ dependencies = [
  "crossbeam-channel",
  "delay-detector",
  "enum-map",
- "itertools",
+ "itertools 0.10.5",
  "itoa",
  "lru",
  "near-cache",
@@ -3073,7 +3098,7 @@ dependencies = [
  "delay-detector",
  "derive_more",
  "futures",
- "itertools",
+ "itertools 0.10.5",
  "lru",
  "near-async",
  "near-chain",
@@ -3340,7 +3365,7 @@ dependencies = [
  "futures",
  "futures-util",
  "im",
- "itertools",
+ "itertools 0.10.5",
  "lru",
  "near-async",
  "near-crypto",
@@ -3573,7 +3598,7 @@ dependencies = [
  "elastic-array",
  "enum-map",
  "fs2",
- "itertools",
+ "itertools 0.10.5",
  "itoa",
  "lru",
  "near-chain-configs",
@@ -4141,7 +4166,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2509afd8f138efe07cd367832289f5cc61d1eb1ec7f1eb75172abca6f7b9b66d"
 dependencies = [
  "anyhow",
- "itertools",
+ "itertools 0.10.5",
  "once_cell",
  "paperclip-actix",
  "paperclip-core",
@@ -4456,7 +4481,7 @@ checksum = "62941722fb675d463659e49c4f3fe1fe792ff24fe5bbaa9c08cd3b98a1c354f5"
 dependencies = [
  "bytes",
  "heck 0.3.3",
- "itertools",
+ "itertools 0.10.5",
  "lazy_static",
  "log",
  "multimap",
@@ -4475,7 +4500,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f9cc1a3263e07e0bf68e96268f37665207b49560d98739662cdfaae215c720fe"
 dependencies = [
  "anyhow",
- "itertools",
+ "itertools 0.10.5",
  "proc-macro2",
  "quote",
  "syn 1.0.109",
@@ -4719,6 +4744,29 @@ checksum = "1465873a3dfdaa8ae7cb14b4383657caab0b3e8a0aa9ae8e04b044854c8dfce2"
 dependencies = [
  "crossbeam-deque",
  "crossbeam-utils",
+]
+
+[[package]]
+name = "redis"
+version = "0.24.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c580d9cbbe1d1b479e8d67cf9daf6a62c957e6846048408b80b43ac3f6af84cd"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "combine",
+ "futures-util",
+ "itoa",
+ "native-tls",
+ "percent-encoding",
+ "pin-project-lite",
+ "ryu",
+ "sha1_smol",
+ "socket2 0.4.10",
+ "tokio",
+ "tokio-native-tls",
+ "tokio-util 0.7.10",
+ "url",
 ]
 
 [[package]]
@@ -5390,6 +5438,12 @@ dependencies = [
  "cpufeatures",
  "digest 0.10.7",
 ]
+
+[[package]]
+name = "sha1_smol"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ae1a47186c03a32177042e55dbc5fd5aee900b8e0069a8d70fba96a9375cd012"
 
 [[package]]
 name = "sha2"

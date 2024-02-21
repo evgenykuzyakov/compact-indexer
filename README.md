@@ -7,81 +7,103 @@ Indexes NEAR blockchain actions and store them in a ClickHouse DB.
 ```sql
 -- This is a ClickHouse table.
 -- receipt_index is an index of a receipt within a block. It's used for deduplication of actions.
-CREATE TABLE default.actions
+CREATE TABLE near.repl_actions on CLUSTER cluster1
 (
-    block_height UInt64,
-    block_hash String,
-    block_timestamp DateTime64(9, 'UTC'),
-    receipt_id String,
-    receipt_index UInt16,
-    action_index UInt8,
-    signer_id String,
-    signer_public_key String,
-    predecessor_id String,
-    account_id String,
-    status Enum('FAILURE', 'SUCCESS'),
-    action Enum('CREATE_ACCOUNT', 'DEPLOY_CONTRACT', 'FUNCTION_CALL', 'TRANSFER', 'STAKE', 'ADD_KEY', 'DELETE_KEY', 'DELETE_ACCOUNT', 'DELEGATE'),
-    contract_hash Nullable(String),
-    public_key Nullable(String),
-    access_key_contract_id Nullable(String),
-    deposit Nullable(UInt128),
-    gas_price UInt128,
-    attached_gas Nullable(UInt64),
-    gas_burnt UInt64,
-    tokens_burnt UInt128,
-    method_name Nullable(String),
-    args_account_id Nullable(String),
-    args_new_account_id Nullable(String),
-    args_owner_id Nullable(String),
-    args_receiver_id Nullable(String),
-    args_sender_id Nullable(String),
-    args_token_id Nullable(String),
-    args_amount Nullable(UInt128),
-    args_balance Nullable(UInt128),
-    args_nft_contract_id Nullable(String),
-    args_nft_token_id Nullable(String),
-    args_utm_source Nullable(String),
-    args_utm_medium Nullable(String),
-    args_utm_campaign Nullable(String),
-    args_utm_term Nullable(String),
-    args_utm_content Nullable(String),
-    return_value_int Nullable(UInt128),
+    block_height UInt64 COMMENT 'Block height',
+    block_hash String COMMENT 'Block hash',
+    block_timestamp DateTime64(9, 'UTC') COMMENT 'Block timestamp in UTC',
+    receipt_id String COMMENT 'Receipt hash',
+    receipt_index UInt16 COMMENT 'Index of the receipt that appears in the block across all shards',
+    action_index UInt8 COMMENT 'Index of the actions within the receipt',
+    signer_id String COMMENT 'The account ID of the transaction signer',
+    signer_public_key String COMMENT 'The public key of the transaction signer',
+    predecessor_id String COMMENT 'The account ID of the receipt predecessor',
+    account_id String COMMENT 'The account ID of where the receipt is executed',
+    status Enum('FAILURE', 'SUCCESS') COMMENT 'The status of the receipt execution, either SUCCESS or FAILURE',
+    action Enum('CREATE_ACCOUNT', 'DEPLOY_CONTRACT', 'FUNCTION_CALL', 'TRANSFER', 'STAKE', 'ADD_KEY', 'DELETE_KEY', 'DELETE_ACCOUNT', 'DELEGATE') COMMENT 'The action type',
+    contract_hash Nullable(String) COMMENT 'The hash of the contract if the action is DEPLOY_CONTRACT',
+    public_key Nullable(String) COMMENT 'The public key used in the action if the action is ADD_KEY or DELETE_KEY',
+    access_key_contract_id Nullable(String) COMMENT 'The contract ID of the limited access key if the action is ADD_KEY and not a full access key',
+    deposit Nullable(UInt128) COMMENT 'The amount of attached deposit in yoctoNEAR if the action is FUNCTION_CALL, STAKE or TRANSFER',
+    gas_price UInt128 COMMENT 'The gas price in yoctoNEAR for the receipt',
+    attached_gas Nullable(UInt64) COMMENT 'The amount of attached gas if the action is FUNCTION_CALL',
+    gas_burnt UInt64 COMMENT 'The amount of burnt gas for the execution of the whole receipt',
+    tokens_burnt UInt128 COMMENT 'The amount of tokens in yoctoNEAR burnt for the execution of the whole receipt',
+    method_name Nullable(String) COMMENT 'The method name if the action is FUNCTION_CALL',
+    args_account_id Nullable(String) COMMENT '`account_id` argument from the JSON arguments if the action is FUNCTION_CALL',
+    args_new_account_id Nullable(String) COMMENT '`new_account_id` argument from the JSON arguments if the action is FUNCTION_CALL',
+    args_owner_id Nullable(String) COMMENT '`owner_id` argument from the JSON arguments if the action is FUNCTION_CALL',
+    args_receiver_id Nullable(String) COMMENT '`receiver_id` argument from the JSON arguments if the action is FUNCTION_CALL',
+    args_sender_id Nullable(String) COMMENT '`sender_id` argument from the JSON arguments if the action is FUNCTION_CALL',
+    args_token_id Nullable(String) COMMENT '`token_id` argument from the JSON arguments if the action is FUNCTION_CALL',
+    args_amount Nullable(UInt128) COMMENT '`amount` argument from the JSON arguments if the action is FUNCTION_CALL',
+    args_balance Nullable(UInt128) COMMENT '`balance` argument from the JSON arguments if the action is FUNCTION_CALL',
+    args_nft_contract_id Nullable(String) COMMENT '`nft_contract_id` argument from the JSON arguments if the action is FUNCTION_CALL',
+    args_nft_token_id Nullable(String) COMMENT '`nft_token_id` argument from the JSON arguments if the action is FUNCTION_CALL',
+    args_utm_source Nullable(String) COMMENT '`_utm_source` argument from the JSON arguments if the action is FUNCTION_CALL',
+    args_utm_medium Nullable(String) COMMENT '`_utm_medium` argument from the JSON arguments if the action is FUNCTION_CALL',
+    args_utm_campaign Nullable(String) COMMENT '`_utm_campaign` argument from the JSON arguments if the action is FUNCTION_CALL',
+    args_utm_term Nullable(String) COMMENT '`_utm_term` argument from the JSON arguments if the action is FUNCTION_CALL',
+    args_utm_content Nullable(String) COMMENT '`_utm_content` argument from the JSON arguments if the action is FUNCTION_CALL',
+    return_value_int Nullable(UInt128) COMMENT 'The parsed integer string from the returned value of the FUNCTION_CALL action',
+
+    INDEX block_height_minmax_idx block_height TYPE minmax GRANULARITY 1,
+    INDEX block_timestamp_minmax_idx block_timestamp TYPE minmax GRANULARITY 1,
+    INDEX public_key_bloom_index public_key TYPE bloom_filter() GRANULARITY 1,
+    INDEX predecessor_id_bloom_index predecessor_id TYPE bloom_filter() GRANULARITY 1,
+    INDEX method_name_index method_name TYPE set(0) GRANULARITY 1,
+    INDEX args_receiver_id_bloom_index args_receiver_id TYPE bloom_filter() GRANULARITY 1
+    INDEX args_account_id_bloom_index args_account_id TYPE bloom_filter() GRANULARITY 1
 )
-    ENGINE = ReplacingMergeTree()
+    ENGINE = ReplicatedReplacingMergeTree
 PRIMARY KEY (account_id, block_timestamp)
 ORDER BY (account_id, block_timestamp, receipt_index, action_index)
 
-CREATE TABLE default.events
+CREATE TABLE actions AS near.repl_actions
+ENGINE = Distributed(cluster1, near, repl_actions)
+
+CREATE TABLE near.repl_events ON CLUSTER cluster1
 (
-    block_height UInt64,
-    block_hash String,
-    block_timestamp DateTime64(9, 'UTC'),
-    receipt_id String,
-    receipt_index UInt16,
-    log_index UInt16,
-    signer_id String,
-    signer_public_key String,
-    predecessor_id String,
-    account_id String,
-    status Enum('FAILURE', 'SUCCESS'),
+    block_height UInt64 COMMENT 'Block height',
+    block_hash String COMMENT 'Block hash',
+    block_timestamp DateTime64(9, 'UTC') COMMENT 'Block timestamp in UTC',
+    receipt_id String COMMENT 'Receipt hash',
+    receipt_index UInt16 COMMENT 'Index of the receipt that appears in the block across all shards',
+    log_index UInt16 COMMENT 'Index of the log within the receipt',
+    signer_id String COMMENT 'The account ID of the transaction signer',
+    signer_public_key String COMMENT 'The public key of the transaction signer',
+    predecessor_id String COMMENT 'The account ID of the receipt predecessor',
+    account_id String COMMENT 'The account ID of where the receipt is executed',
+    status Enum('FAILURE', 'SUCCESS') COMMENT 'The status of the receipt execution, either SUCCESS or FAILURE',
     
-    version Nullable(String),
-    standard Nullable(String),
-    event Nullable(String),
-    data_account_id Nullable(String),
-    data_owner_id Nullable(String),
-    data_old_owner_id Nullable(String),
-    data_new_owner_id Nullable(String),
-    data_liquidation_account_id Nullable(String),
-    data_authorized_id Nullable(String),
-    data_token_ids Array(String),
-    data_token_id Nullable(String),
-    data_position Nullable(String),
-    data_amount Nullable(UInt128),
-)
-    ENGINE = ReplacingMergeTree()
+    version Nullable(String) COMMENT '`version` field from the JSON event',
+    standard Nullable(String) COMMENT '`standard` field from the JSON event',
+    event Nullable(String) COMMENT '`event` field from the JSON event',
+    data_account_id Nullable(String) COMMENT '`account_id` field from the first data object in the JSON event',
+    data_owner_id Nullable(String) COMMENT '`owner_id` field from the first data object in the JSON event',
+    data_old_owner_id Nullable(String) COMMENT '`old_owner_id` field from the first data object in the JSON event',
+    data_new_owner_id Nullable(String) COMMENT '`new_owner_id` field from the first data object in the JSON event',
+    data_liquidation_account_id Nullable(String) COMMENT '`liquidation_account_id` field from the first data object in the JSON event',
+    data_authorized_id Nullable(String) COMMENT '`authorized_id` field from the first data object in the JSON event',
+    data_token_ids Array(String) COMMENT '`token_ids` field from the first data object in the JSON event',
+    data_token_id Nullable(String) COMMENT '`token_id` field from the first data object in the JSON event',
+    data_position Nullable(String) COMMENT '`position` field from the first data object in the JSON event',
+    data_amount Nullable(UInt128) COMMENT '`amount` field from the first data object in the JSON event',
+
+    INDEX block_height_minmax_idx block_height TYPE minmax GRANULARITY 1,
+    INDEX block_timestamp_minmax_idx block_timestamp TYPE minmax GRANULARITY 1,
+    INDEX event_set_index event TYPE set(0) GRANULARITY 1,
+    INDEX data_account_id_bloom_index data_account_id TYPE bloom_filter() GRANULARITY 1,
+    INDEX data_owner_id_bloom_index data_owner_id TYPE bloom_filter() GRANULARITY 1,
+    INDEX data_old_owner_id_bloom_index data_old_owner_id TYPE bloom_filter() GRANULARITY 1,
+    INDEX data_new_owner_id_bloom_index data_new_owner_id TYPE bloom_filter() GRANULARITY 1,
+    )
+    ENGINE = ReplicatedReplacingMergeTree
 PRIMARY KEY (account_id, block_timestamp)
 ORDER BY (account_id, block_timestamp, receipt_index, log_index)
+
+CREATE TABLE events AS near.repl_events
+    ENGINE = Distributed(cluster1, near, repl_events)
 ```
 
 ## To run

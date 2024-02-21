@@ -1,6 +1,6 @@
 [package]
 name = "compact-indexer"
-version = "0.4.0"
+version = "0.5.0"
 authors = ["Eugene The Dream"]
 rust-version = "1.71.0"
 edition = "2021"
@@ -12,6 +12,11 @@ path = "src/bin/node.rs"
 [[bin]]
 name = "lake-indexer"
 path = "src/bin/lake.rs"
+
+[[bin]]
+name = "redis-indexer"
+path = "src/bin/red.rs"
+
 
 [dependencies]
 actix = "=0.13.0"
@@ -37,6 +42,9 @@ serde_json = "1"
 serde_repr = "0.1.6"
 
 near-indexer = { git = "https://github.com/near/nearcore", rev = "1.36.5" }
+
+redis = { version = "0.24.0", features = ["tokio-comp", "tokio-native-tls-comp", "streams"] }
+itertools = "0.12.0"
 
 clickhouse = "0.11.6"
 
