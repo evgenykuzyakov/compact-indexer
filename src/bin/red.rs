@@ -57,7 +57,7 @@ async fn main() {
 
     tracing::log::info!(target: PROJECT_ID, "Starting NEAR Redis Indexer");
 
-    let mut click_db = ClickDB::new(1);
+    let click_db = ClickDB::new(1);
     let mut redis_db = RedisDB::new().await;
 
     let (id, _key_values) = redis_db
@@ -89,7 +89,7 @@ async fn main() {
 
 async fn listen_blocks(mut stream: mpsc::Receiver<StreamerMessage>, mut db: ClickDB) {
     while let Some(streamer_message) = stream.recv().await {
-        tracing::log::debug!(target: PROJECT_ID, "Received streamer message: {:?}", streamer_message.block.header.height);
+        tracing::log::info!(target: PROJECT_ID, "Processing block: {}", streamer_message.block.header.height);
         extract_info(&mut db, streamer_message).await.unwrap();
     }
     db.commit().await.unwrap();

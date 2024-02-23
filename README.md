@@ -6,7 +6,6 @@ Indexes NEAR blockchain actions and store them in a ClickHouse DB.
 
 ```sql
 -- This is a ClickHouse table.
--- receipt_index is an index of a receipt within a block. It's used for deduplication of actions.
 CREATE TABLE near.repl_actions on CLUSTER cluster1
 (
     block_height UInt64 COMMENT 'Block height',
@@ -48,17 +47,21 @@ CREATE TABLE near.repl_actions on CLUSTER cluster1
     return_value_int Nullable(UInt128) COMMENT 'The parsed integer string from the returned value of the FUNCTION_CALL action',
 
     INDEX block_height_minmax_idx block_height TYPE minmax GRANULARITY 1,
-    INDEX block_timestamp_minmax_idx block_timestamp TYPE minmax GRANULARITY 1,
+    INDEX account_id_bloom_index account_id TYPE bloom_filter() GRANULARITY 1,
+    INDEX signer_id_bloom_index signer_id TYPE bloom_filter() GRANULARITY 1,
     INDEX public_key_bloom_index public_key TYPE bloom_filter() GRANULARITY 1,
     INDEX predecessor_id_bloom_index predecessor_id TYPE bloom_filter() GRANULARITY 1,
     INDEX method_name_index method_name TYPE set(0) GRANULARITY 1,
-    INDEX args_receiver_id_bloom_index args_receiver_id TYPE bloom_filter() GRANULARITY 1
-    INDEX args_account_id_bloom_index args_account_id TYPE bloom_filter() GRANULARITY 1
+    INDEX args_account_id_bloom_index args_account_id TYPE bloom_filter() GRANULARITY 1,
+    INDEX args_new_account_id_bloom_index args_new_account_id TYPE bloom_filter() GRANULARITY 1,
+    INDEX args_owner_id_bloom_index args_owner_id TYPE bloom_filter() GRANULARITY 1,
+    INDEX args_receiver_id_bloom_index args_receiver_id TYPE bloom_filter() GRANULARITY 1,
+    INDEX args_sender_id_bloom_index args_sender_id TYPE bloom_filter() GRANULARITY 1,
 )
     ENGINE = ReplicatedReplacingMergeTree
-PRIMARY KEY (account_id, block_timestamp)
-ORDER BY (account_id, block_timestamp, receipt_index, action_index)
-
+PRIMARY KEY (block_timestamp, account_id)
+ORDER BY (block_timestamp, account_id, receipt_index, action_index)
+                               
 CREATE TABLE actions AS near.repl_actions
 ENGINE = Distributed(cluster1, near, repl_actions)
 
@@ -91,19 +94,19 @@ CREATE TABLE near.repl_events ON CLUSTER cluster1
     data_amount Nullable(UInt128) COMMENT '`amount` field from the first data object in the JSON event',
 
     INDEX block_height_minmax_idx block_height TYPE minmax GRANULARITY 1,
-    INDEX block_timestamp_minmax_idx block_timestamp TYPE minmax GRANULARITY 1,
+    INDEX account_id_bloom_index account_id TYPE bloom_filter() GRANULARITY 1,
     INDEX event_set_index event TYPE set(0) GRANULARITY 1,
     INDEX data_account_id_bloom_index data_account_id TYPE bloom_filter() GRANULARITY 1,
     INDEX data_owner_id_bloom_index data_owner_id TYPE bloom_filter() GRANULARITY 1,
     INDEX data_old_owner_id_bloom_index data_old_owner_id TYPE bloom_filter() GRANULARITY 1,
     INDEX data_new_owner_id_bloom_index data_new_owner_id TYPE bloom_filter() GRANULARITY 1,
     )
-    ENGINE = ReplicatedReplacingMergeTree
-PRIMARY KEY (account_id, block_timestamp)
-ORDER BY (account_id, block_timestamp, receipt_index, log_index)
+ENGINE = ReplicatedReplacingMergeTree
+PRIMARY KEY (block_timestamp, account_id)
+ORDER BY (block_timestamp, account_id, receipt_index, log_index)
 
 CREATE TABLE events AS near.repl_events
-    ENGINE = Distributed(cluster1, near, repl_events)
+ENGINE = Distributed(cluster1, near, repl_events)
 ```
 
 ## To run
