@@ -14,9 +14,11 @@ pub struct RedisDB {
 
 #[allow(dead_code)]
 impl RedisDB {
-    pub async fn new() -> Self {
-        let client = Client::open(env::var("REDIS_URL").expect("Missing REDIS_URL env var"))
-            .expect("Failed to connect to Redis");
+    pub async fn new(redis_url: Option<String>) -> Self {
+        let client = Client::open(
+            redis_url.unwrap_or_else(|| env::var("REDIS_URL").expect("Missing REDIS_URL env var")),
+        )
+        .expect("Failed to connect to Redis");
         let connection = client
             .get_async_connection()
             .await
@@ -119,4 +121,42 @@ impl RedisDB {
             .await?;
         Ok(entries.first().map(|e| e.id().unwrap()))
     }
+
+    pub async fn hset(&mut self, key: &str, data: &[(String, String)]) -> redis::RedisResult<()> {
+        redis::cmd("HSET")
+            .arg(key)
+            .arg(data)
+            .query_async(&mut self.connection)
+            .await
+    }
+}
+
+#[macro_export]
+macro_rules! with_retries {
+    ($db: expr, $f_async: expr) => {
+        {
+            let mut delay = tokio::time::Duration::from_millis(100);
+            let max_retries = 10;
+            let mut i = 0;
+            loop {
+                match $f_async(&mut $db.connection).await {
+                    Ok(v) => break Ok(v),
+                    Err(err) => {
+                        if err.kind() == redis::ErrorKind::ResponseError {
+                            tracing::log::info!(target: "redis", "Duplicate ID");
+                        } else {
+                            tracing::log::error!(target: "redis", "Attempt #{}: {}", i, err);
+                            tokio::time::sleep(delay).await;
+                            $db.reconnect().await?;
+                            delay *= 2;
+                            if i == max_retries - 1 {
+                                break Err(err);
+                            }
+                        }
+                    }
+                };
+                i += 1;
+            }
+        }
+    };
 }

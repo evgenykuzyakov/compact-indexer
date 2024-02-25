@@ -6,11 +6,12 @@ Indexes NEAR blockchain actions and store them in a ClickHouse DB.
 
 ```sql
 -- This is a ClickHouse table.
-CREATE TABLE near.repl_actions on CLUSTER cluster1
+CREATE TABLE near.repl_actions_tx on CLUSTER cluster1
 (
     block_height UInt64 COMMENT 'Block height',
     block_hash String COMMENT 'Block hash',
     block_timestamp DateTime64(9, 'UTC') COMMENT 'Block timestamp in UTC',
+    transaction_hash String COMMENT 'Transaction hash',
     receipt_id String COMMENT 'Receipt hash',
     receipt_index UInt16 COMMENT 'Index of the receipt that appears in the block across all shards',
     action_index UInt8 COMMENT 'Index of the actions within the receipt',
@@ -49,6 +50,9 @@ CREATE TABLE near.repl_actions on CLUSTER cluster1
     INDEX block_height_minmax_idx block_height TYPE minmax GRANULARITY 1,
     INDEX account_id_bloom_index account_id TYPE bloom_filter() GRANULARITY 1,
     INDEX signer_id_bloom_index signer_id TYPE bloom_filter() GRANULARITY 1,
+    INDEX block_hash_bloom_index block_hash TYPE bloom_filter() GRANULARITY 1,
+    INDEX transaction_hash_bloom_index transaction_hash TYPE bloom_filter() GRANULARITY 1,
+    INDEX receipt_hash_bloom_index receipt_hash TYPE bloom_filter() GRANULARITY 1,
     INDEX public_key_bloom_index public_key TYPE bloom_filter() GRANULARITY 1,
     INDEX predecessor_id_bloom_index predecessor_id TYPE bloom_filter() GRANULARITY 1,
     INDEX method_name_index method_name TYPE set(0) GRANULARITY 1,
@@ -62,14 +66,15 @@ CREATE TABLE near.repl_actions on CLUSTER cluster1
 PRIMARY KEY (block_timestamp, account_id)
 ORDER BY (block_timestamp, account_id, receipt_index, action_index)
                                
-CREATE TABLE actions AS near.repl_actions
-ENGINE = Distributed(cluster1, near, repl_actions)
+CREATE TABLE actions_tx AS near.repl_actions_tx
+ENGINE = Distributed(cluster1, near, repl_actions_tx)
 
 CREATE TABLE near.repl_events ON CLUSTER cluster1
 (
     block_height UInt64 COMMENT 'Block height',
     block_hash String COMMENT 'Block hash',
     block_timestamp DateTime64(9, 'UTC') COMMENT 'Block timestamp in UTC',
+    transaction_hash String COMMENT 'Transaction hash',
     receipt_id String COMMENT 'Receipt hash',
     receipt_index UInt16 COMMENT 'Index of the receipt that appears in the block across all shards',
     log_index UInt16 COMMENT 'Index of the log within the receipt',

@@ -17,6 +17,9 @@ path = "src/bin/lake.rs"
 name = "redis-indexer"
 path = "src/bin/red.rs"
 
+[[bin]]
+name = "ft-red"
+path = "src/bin/ft_red.rs"
 
 [dependencies]
 actix = "=0.13.0"
