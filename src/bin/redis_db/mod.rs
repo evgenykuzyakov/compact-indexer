@@ -42,7 +42,7 @@ impl RedisDB {
             .await
     }
 
-    pub async fn get(&mut self, key: &str) -> redis::RedisResult<String> {
+    pub async fn get(&mut self, key: &str) -> redis::RedisResult<Option<String>> {
         redis::cmd("GET")
             .arg(key)
             .query_async(&mut self.connection)
@@ -147,7 +147,7 @@ macro_rules! with_retries {
                         } else {
                             tracing::log::error!(target: "redis", "Attempt #{}: {}", i, err);
                             tokio::time::sleep(delay).await;
-                            $db.reconnect().await?;
+                            let _ = $db.reconnect().await;
                             delay *= 2;
                             if i == max_retries - 1 {
                                 break Err(err);

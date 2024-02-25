@@ -27,7 +27,7 @@ pub enum ReceiptStatus {
     Success = 2,
 }
 
-#[derive(Copy, Clone, Debug, Serialize_repr, Deserialize_repr)]
+#[derive(Copy, Clone, Debug, Serialize_repr, Deserialize_repr, PartialEq)]
 #[repr(u8)]
 pub enum ActionKind {
     CreateAccount = 1,

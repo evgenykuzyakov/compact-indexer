@@ -6,7 +6,7 @@ use redis_db::RedisDB;
 use std::collections::{HashMap, HashSet};
 use std::env;
 
-use crate::click::{extract_rows, ActionRow, EventRow, ReceiptStatus};
+use crate::click::{extract_rows, ActionKind, ActionRow, EventRow, ReceiptStatus};
 use dotenv::dotenv;
 use near_indexer::near_primitives::types::BlockHeight;
 use near_indexer::StreamerMessage;
@@ -16,6 +16,7 @@ const PROJECT_ID: &str = "ft_red";
 
 const FINAL_BLOCKS_KEY: &str = "final_blocks";
 const BLOCK_KEY: &str = "block";
+const SAFE_OFFSET: u64 = 100;
 
 async fn start(
     mut last_id: String,
@@ -59,7 +60,7 @@ async fn main() {
     tracing::log::info!(target: PROJECT_ID, "Starting FT Redis Indexer");
 
     let mut read_redis_db = RedisDB::new(None).await;
-    let write_redis_db = RedisDB::new(Some(
+    let mut write_redis_db = RedisDB::new(Some(
         env::var("WRITE_REDIS_URL").expect("Missing env WRITE_REDIS_URL"),
     ))
     .await;
@@ -74,16 +75,19 @@ async fn main() {
     let first_block_height: BlockHeight = id.split_once("-").unwrap().0.parse().unwrap();
     tracing::log::info!(target: PROJECT_ID, "First redis block {}", first_block_height);
 
-    // TODO: last_block_height
-    let last_block_height = Some(first_block_height + 1000);
-    let last_id = last_block_height
-        .map(|h| format!("{}-0", h))
-        .unwrap_or("0".to_string());
-    tracing::log::info!(target: PROJECT_ID, "Resuming from {}", last_block_height.unwrap_or(0));
+    let last_block_height: BlockHeight = write_redis_db
+        .get("meta:latest_block")
+        .await
+        .expect("Failed to get the latest block")
+        .map(|s| s.parse().unwrap())
+        .unwrap_or(first_block_height + SAFE_OFFSET);
 
-    if first_block_height + 30 > last_block_height.unwrap_or(0) {
+    if first_block_height + SAFE_OFFSET > last_block_height {
         panic!("The first block in the redis is too close to the last block");
     }
+
+    let last_id = format!("{}-0", last_block_height);
+    tracing::log::info!(target: PROJECT_ID, "Resuming from {}", last_block_height);
 
     let stream = streamer(last_id, read_redis_db);
     listen_blocks(stream, write_redis_db).await;
@@ -91,13 +95,67 @@ async fn main() {
 
 async fn listen_blocks(mut stream: mpsc::Receiver<StreamerMessage>, mut redis_db: RedisDB) {
     while let Some(streamer_message) = stream.recv().await {
-        tracing::log::info!(target: PROJECT_ID, "Processing block: {}", streamer_message.block.header.height);
+        let block_height = streamer_message.block.header.height;
+        tracing::log::info!(target: PROJECT_ID, "Processing block: {}", block_height);
         let (actions, events) = extract_rows(streamer_message);
 
         update_ft_pairs(&actions, &events, &mut redis_db)
             .await
             .expect("Failed to update FT pairs");
+
+        update_staking(&actions, &mut redis_db)
+            .await
+            .expect("Failed to update staking");
+
+        let res: redis::RedisResult<()> = with_retries!(redis_db, |connection| async {
+            redis::cmd("SET")
+                .arg("meta:latest_block")
+                .arg(block_height)
+                .query_async(connection)
+                .await
+        });
+        res.expect("Failed to update latest block");
     }
+}
+
+async fn update_staking(actions: &[ActionRow], redis_db: &mut RedisDB) -> redis::RedisResult<()> {
+    // Extract matching (account_id, validator_id) for staking changes
+    let mut pairs = HashSet::new();
+    for action in actions {
+        if action.status != ReceiptStatus::Success || action.action != ActionKind::FunctionCall {
+            continue;
+        }
+        if action.account_id.ends_with(".poolv1.near") || action.account_id.ends_with(".pool.near")
+        {
+            pairs.insert((action.predecessor_id.clone(), action.account_id.clone()));
+        }
+    }
+
+    if pairs.is_empty() {
+        return Ok(());
+    }
+
+    let account_id_to_validator_id: HashMap<String, Vec<(String, String)>> = pairs
+        .into_iter()
+        .fold(HashMap::new(), |mut acc, (account_id, token_id)| {
+            acc.entry(account_id)
+                .or_insert_with(Vec::new)
+                .push((token_id, "".to_string()));
+            acc
+        });
+    tracing::log::info!(target: PROJECT_ID, "Updating {} staking pairs", account_id_to_validator_id.len());
+
+    let res: redis::RedisResult<()> = with_retries!(redis_db, |connection| async {
+        let mut pipe = redis::pipe();
+        for (account_id, token_ids) in &account_id_to_validator_id {
+            pipe.cmd("HSET")
+                .arg(format!("st:{}", account_id))
+                .arg(token_ids)
+                .ignore();
+        }
+        pipe.query_async(connection).await
+    });
+    res
 }
 
 async fn update_ft_pairs(
@@ -105,7 +163,7 @@ async fn update_ft_pairs(
     events: &[EventRow],
     redis_db: &mut RedisDB,
 ) -> redis::RedisResult<()> {
-    // Extract matching (token_id, account_id) for FT changes
+    // Extract matching (account_id, token_id) for FT changes
     let mut pairs = HashSet::new();
     for action in actions {
         if action.status != ReceiptStatus::Success {
@@ -169,9 +227,9 @@ async fn update_ft_pairs(
                     .push((token_id, "".to_string()));
                 acc
             });
-    tracing::log::info!(target: PROJECT_ID, "Updating {} pairs", account_id_to_token_id.len());
+    tracing::log::info!(target: PROJECT_ID, "Updating {} FT pairs", account_id_to_token_id.len());
 
-    let _: redis::RedisResult<()> = with_retries!(redis_db, |connection| async {
+    let res: redis::RedisResult<()> = with_retries!(redis_db, |connection| async {
         let mut pipe = redis::pipe();
         for (account_id, token_ids) in &account_id_to_token_id {
             pipe.cmd("HSET")
@@ -181,6 +239,5 @@ async fn update_ft_pairs(
         }
         pipe.query_async(connection).await
     });
-
-    Ok(())
+    res
 }
