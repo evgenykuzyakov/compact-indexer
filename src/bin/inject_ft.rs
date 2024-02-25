@@ -2,7 +2,7 @@ mod common;
 mod redis_db;
 
 use redis_db::RedisDB;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::env;
 use std::path::Prefix;
 
@@ -66,7 +66,7 @@ async fn main() {
         .has_headers(false)
         .from_reader(std::fs::File::open(csv_fn).expect("Failed to open the file"));
 
-    let mut account_to_field: HashMap<String, Vec<(String, String)>> = HashMap::new();
+    let mut account_to_field: BTreeMap<String, Vec<(String, String)>> = BTreeMap::new();
     let mut total_records: usize = 0;
     for (i, result) in csv_reader.records().enumerate() {
         if i % 10000 == 0 {
@@ -90,7 +90,7 @@ async fn main() {
     for (i, (account_id, fields)) in account_to_field.into_iter().enumerate() {
         cnt += fields.len();
         records.push((account_id, fields));
-        if i % 100 == 0 || cnt >= MIN_BATCH {
+        if i % 10000 == 0 || cnt >= MIN_BATCH {
             tracing::log::info!(target: PROJECT_ID, "Injecting progress: {} accounts and {} records", i, total_cnt);
         }
         if cnt >= MIN_BATCH {
