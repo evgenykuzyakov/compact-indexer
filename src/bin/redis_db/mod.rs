@@ -142,16 +142,12 @@ macro_rules! with_retries {
                 match $f_async(&mut $db.connection).await {
                     Ok(v) => break Ok(v),
                     Err(err) => {
-                        if err.kind() == redis::ErrorKind::ResponseError {
-                            tracing::log::info!(target: "redis", "Duplicate ID");
-                        } else {
-                            tracing::log::error!(target: "redis", "Attempt #{}: {}", i, err);
-                            tokio::time::sleep(delay).await;
-                            let _ = $db.reconnect().await;
-                            delay *= 2;
-                            if i == max_retries - 1 {
-                                break Err(err);
-                            }
+                        tracing::log::error!(target: "redis", "Attempt #{}: {}", i, err);
+                        tokio::time::sleep(delay).await;
+                        let _ = $db.reconnect().await;
+                        delay *= 2;
+                        if i == max_retries - 1 {
+                            break Err(err);
                         }
                     }
                 };
