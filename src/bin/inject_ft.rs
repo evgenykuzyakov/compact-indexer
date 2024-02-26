@@ -74,7 +74,7 @@ async fn main() {
     let mut account_to_field: BTreeMap<String, Vec<(String, String)>> = BTreeMap::new();
     let mut total_records: usize = 0;
     for (i, result) in csv_reader.records().enumerate() {
-        if i % 10000 == 0 {
+        if i % 100000 == 0 {
             tracing::log::info!(target: PROJECT_ID, "Processed {} records", i);
         }
         let record = result.expect("Failed to read the record");
