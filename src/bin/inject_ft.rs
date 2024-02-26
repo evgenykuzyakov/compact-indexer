@@ -52,6 +52,11 @@ async fn main() {
 
     let args: Vec<String> = std::env::args().collect();
     let command = args.get(1).map(|arg| arg.as_str()).unwrap_or("");
+    let offset: usize = args.get(2).map(|arg| arg.parse().unwrap()).unwrap_or(0);
+    let limit: usize = args
+        .get(3)
+        .map(|arg| arg.parse().unwrap())
+        .unwrap_or(usize::MAX);
 
     let (prefix, env_name) = match command {
         "ft" => ("ft", "FT_CSV_PATH"),
@@ -87,7 +92,12 @@ async fn main() {
     let mut records = Vec::new();
     let mut cnt = 0;
     let mut total_cnt = 0;
-    for (i, (account_id, fields)) in account_to_field.into_iter().enumerate() {
+    for (i, (account_id, fields)) in account_to_field
+        .into_iter()
+        .skip(offset)
+        .take(limit)
+        .enumerate()
+    {
         cnt += fields.len();
         records.push((account_id, fields));
         if i % 10000 == 0 || cnt >= MIN_BATCH {
