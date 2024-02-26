@@ -11,6 +11,7 @@ use dotenv::dotenv;
 use near_indexer::near_primitives::types::BlockHeight;
 use near_indexer::StreamerMessage;
 use tokio::sync::mpsc;
+use tracing_subscriber::fmt::format;
 
 const PROJECT_ID: &str = "ft_red";
 
@@ -99,26 +100,32 @@ async fn listen_blocks(mut stream: mpsc::Receiver<StreamerMessage>, mut redis_db
         tracing::log::info!(target: PROJECT_ID, "Processing block: {}", block_height);
         let (actions, events) = extract_rows(streamer_message);
 
-        update_ft_pairs(&actions, &events, &mut redis_db)
-            .await
-            .expect("Failed to update FT pairs");
+        let mut to_update: HashMap<String, Vec<(String, String)>> = HashMap::new();
 
-        update_staking(&actions, &mut redis_db)
-            .await
-            .expect("Failed to update staking");
+        add_pairs_to_update("ft", extract_ft_pairs(&actions, &events), &mut to_update);
+        add_pairs_to_update("nf", extract_nft_pairs(&actions, &events), &mut to_update);
+        add_pairs_to_update("st", extract_staking_pairs(&actions), &mut to_update);
+
+        tracing::log::info!(target: PROJECT_ID, "Updating {} accounts", to_update.len());
+        // tracing::log::info!(target: PROJECT_ID, "Updating accounts {:?}", to_update);
 
         let res: redis::RedisResult<()> = with_retries!(redis_db, |connection| async {
-            redis::cmd("SET")
+            let mut pipe = redis::pipe();
+            for (key, fields_data) in &to_update {
+                pipe.cmd("HSET").arg(key).arg(fields_data).ignore();
+            }
+            pipe.cmd("SET")
                 .arg("meta:latest_block")
                 .arg(block_height)
-                .query_async(connection)
-                .await
+                .ignore();
+
+            pipe.query_async(connection).await
         });
-        res.expect("Failed to update latest block");
+        res.expect("Failed to update");
     }
 }
 
-async fn update_staking(actions: &[ActionRow], redis_db: &mut RedisDB) -> redis::RedisResult<()> {
+fn extract_staking_pairs(actions: &[ActionRow]) -> HashSet<(String, String)> {
     // Extract matching (account_id, validator_id) for staking changes
     let mut pairs = HashSet::new();
     for action in actions {
@@ -131,38 +138,10 @@ async fn update_staking(actions: &[ActionRow], redis_db: &mut RedisDB) -> redis:
         }
     }
 
-    if pairs.is_empty() {
-        return Ok(());
-    }
-
-    let account_id_to_validator_id: HashMap<String, Vec<(String, String)>> = pairs
-        .into_iter()
-        .fold(HashMap::new(), |mut acc, (account_id, token_id)| {
-            acc.entry(account_id)
-                .or_insert_with(Vec::new)
-                .push((token_id, "".to_string()));
-            acc
-        });
-    tracing::log::info!(target: PROJECT_ID, "Updating {} staking pairs", account_id_to_validator_id.len());
-
-    let res: redis::RedisResult<()> = with_retries!(redis_db, |connection| async {
-        let mut pipe = redis::pipe();
-        for (account_id, token_ids) in &account_id_to_validator_id {
-            pipe.cmd("HSET")
-                .arg(format!("st:{}", account_id))
-                .arg(token_ids)
-                .ignore();
-        }
-        pipe.query_async(connection).await
-    });
-    res
+    pairs
 }
 
-async fn update_ft_pairs(
-    actions: &[ActionRow],
-    events: &[EventRow],
-    redis_db: &mut RedisDB,
-) -> redis::RedisResult<()> {
+fn extract_ft_pairs(actions: &[ActionRow], events: &[EventRow]) -> HashSet<(String, String)> {
     // Extract matching (account_id, token_id) for FT changes
     let mut pairs = HashSet::new();
     for action in actions {
@@ -213,31 +192,69 @@ async fn update_ft_pairs(
         }
     }
 
-    // Update the pairs in the Redis
-    if pairs.is_empty() {
-        return Ok(());
+    pairs
+}
+
+fn extract_nft_pairs(actions: &[ActionRow], events: &[EventRow]) -> HashSet<(String, String)> {
+    // Extract matching (account_id, token_id) for FT changes
+    let mut pairs = HashSet::new();
+    for action in actions {
+        if action.status != ReceiptStatus::Success {
+            continue;
+        }
+        let token_id = &action.account_id;
+        if let Some(method_name) = action.method_name.as_ref() {
+            if [
+                "nft_transfer_call",
+                "nft_transfer",
+                "nft_approve",
+                "nft_revoke",
+                "nft_revoke_all",
+                "nft_mint",
+                "nft_burn",
+            ]
+            .contains(&method_name.as_str())
+            {
+                pairs.insert((action.predecessor_id.clone(), token_id.clone()));
+                if let Some(account_id) = action.args_receiver_id.as_ref() {
+                    pairs.insert((account_id.clone(), token_id.clone()));
+                }
+            }
+        }
+    }
+    for event in events {
+        if event.status != ReceiptStatus::Success {
+            continue;
+        }
+        let token_id = &event.account_id;
+        if let Some(event_type) = event.event.as_ref() {
+            if ["nft_mint", "nft_burn"].contains(&event_type.as_str()) {
+                if let Some(account_id) = event.data_owner_id.as_ref() {
+                    pairs.insert((account_id.clone(), token_id.clone()));
+                }
+            } else if event_type == "nft_transfer" {
+                if let Some(account_id) = event.data_new_owner_id.as_ref() {
+                    pairs.insert((account_id.clone(), token_id.clone()));
+                }
+                if let Some(account_id) = event.data_old_owner_id.as_ref() {
+                    pairs.insert((account_id.clone(), token_id.clone()));
+                }
+            }
+        }
     }
 
-    let account_id_to_token_id: HashMap<String, Vec<(String, String)>> =
-        pairs
-            .into_iter()
-            .fold(HashMap::new(), |mut acc, (account_id, token_id)| {
-                acc.entry(account_id)
-                    .or_insert_with(Vec::new)
-                    .push((token_id, "".to_string()));
-                acc
-            });
-    tracing::log::info!(target: PROJECT_ID, "Updating {} FT pairs", account_id_to_token_id.len());
+    pairs
+}
 
-    let res: redis::RedisResult<()> = with_retries!(redis_db, |connection| async {
-        let mut pipe = redis::pipe();
-        for (account_id, token_ids) in &account_id_to_token_id {
-            pipe.cmd("HSET")
-                .arg(format!("ft:{}", account_id))
-                .arg(token_ids)
-                .ignore();
-        }
-        pipe.query_async(connection).await
-    });
-    res
+fn add_pairs_to_update(
+    prefix: &str,
+    pairs: HashSet<(String, String)>,
+    to_update: &mut HashMap<String, Vec<(String, String)>>,
+) {
+    for (account_id, token_id) in pairs {
+        to_update
+            .entry(format!("{}:{}", prefix, account_id))
+            .or_insert_with(Vec::new)
+            .push((token_id, "".to_string()));
+    }
 }

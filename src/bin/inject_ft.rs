@@ -61,8 +61,9 @@ async fn main() {
     let (prefix, env_name) = match command {
         "ft" => ("ft", "FT_CSV_PATH"),
         "stake" => ("st", "STAKE_CSV_PATH"),
+        "nft" => ("nf", "NFT_CSV_PATH"),
         _ => {
-            panic!("Invalid command {:?}, expected ft or stake", command);
+            panic!("Invalid command {:?}, expected ft, nft or stake", command);
         }
     };
 
