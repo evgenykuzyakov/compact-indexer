@@ -6,7 +6,6 @@ use dotenv::dotenv;
 use flate2::read::GzDecoder;
 use near_indexer::near_primitives::borsh::BorshSerialize;
 use near_indexer::near_primitives::types::BlockHeight;
-use near_indexer::StreamerMessage;
 use std::collections::HashMap;
 use std::io::Read;
 use std::{env, fs};
@@ -52,7 +51,7 @@ fn read_archive(path: &str) -> HashMap<String, String> {
         .collect()
 }
 
-pub async fn start(config: Config, blocks_sink: mpsc::Sender<StreamerMessage>) {
+pub async fn start(config: Config, blocks_sink: mpsc::Sender<XBlock>) {
     let mut shards = read_folder(&config.path);
     assert!(
         shards.contains(&BLOCK_FOLDER.to_string()),
@@ -97,12 +96,12 @@ pub async fn start(config: Config, blocks_sink: mpsc::Sender<StreamerMessage>) {
             .filter_map(|shard| shard.get(&format!("{}.json", padded_block_height)))
             .map(|s| serde_json::from_str(s).unwrap())
             .collect::<Vec<_>>();
-        let streamer_message = StreamerMessage { block, shards };
+        let streamer_message = XBlock { block, shards };
         blocks_sink.send(streamer_message).await.unwrap();
     }
 }
 
-pub fn streamer(config: Config) -> mpsc::Receiver<StreamerMessage> {
+pub fn streamer(config: Config) -> mpsc::Receiver<XBlock> {
     let (sender, receiver) = mpsc::channel(100);
     actix::spawn(start(config, sender));
     receiver
@@ -174,10 +173,10 @@ fn save_blocks(blocks: &[XBlock], config: &WriterConfig) -> std::io::Result<()> 
     Ok(())
 }
 
-async fn listen_blocks(mut stream: mpsc::Receiver<StreamerMessage>, config: WriterConfig) {
+async fn listen_blocks(mut stream: mpsc::Receiver<XBlock>, config: WriterConfig) {
     let mut blocks: Vec<XBlock> = vec![];
-    while let Some(streamer_message) = stream.recv().await {
-        let block_height = streamer_message.block.header.height;
+    while let Some(xblock) = stream.recv().await {
+        let block_height = xblock.block.header.height;
         if blocks.get(0).map(|b| b.block.header.height).unwrap_or(0) / SAVE_EVERY_N
             != block_height / SAVE_EVERY_N
         {
@@ -186,9 +185,9 @@ async fn listen_blocks(mut stream: mpsc::Receiver<StreamerMessage>, config: Writ
         }
 
         tracing::log::debug!(target: PROJECT_ID, "Processing block: {}", block_height);
-
-        let v = serde_json::to_vec(&streamer_message).unwrap();
-        let xblock: XBlock = serde_json::from_slice(&v).expect("Failed to deserialize");
+        //
+        // let v = serde_json::to_vec(&streamer_message).unwrap();
+        // let xblock: XBlock = serde_json::from_slice(&v).expect("Failed to deserialize");
         blocks.push(xblock);
     }
     if !blocks.is_empty() {
