@@ -64,7 +64,7 @@ async fn main() {
     let mut write_redis_db = RedisDB::new(Some(
         env::var("WRITE_REDIS_URL").expect("Missing env WRITE_REDIS_URL"),
     ))
-    .await;
+        .await;
 
     let (id, _key_values) = read_redis_db
         .xread(1, FINAL_BLOCKS_KEY, "0")
@@ -102,9 +102,24 @@ async fn listen_blocks(mut stream: mpsc::Receiver<StreamerMessage>, mut redis_db
 
         let mut to_update: HashMap<String, Vec<(String, String)>> = HashMap::new();
 
-        add_pairs_to_update("ft", extract_ft_pairs(&actions, &events), &mut to_update);
-        add_pairs_to_update("nf", extract_nft_pairs(&actions, &events), &mut to_update);
-        add_pairs_to_update("st", extract_staking_pairs(&actions), &mut to_update);
+        add_pairs_to_update(
+            "ft",
+            extract_ft_pairs(&actions, &events),
+            &mut to_update,
+            block_height,
+        );
+        add_pairs_to_update(
+            "nf",
+            extract_nft_pairs(&actions, &events),
+            &mut to_update,
+            block_height,
+        );
+        add_pairs_to_update(
+            "st",
+            extract_staking_pairs(&actions),
+            &mut to_update,
+            block_height,
+        );
 
         tracing::log::info!(target: PROJECT_ID, "Updating {} accounts", to_update.len());
         // tracing::log::info!(target: PROJECT_ID, "Updating accounts {:?}", to_update);
@@ -162,7 +177,7 @@ fn extract_ft_pairs(actions: &[ActionRow], events: &[EventRow]) -> HashSet<(Stri
                 "near_deposit",
                 "deposit_and_stake",
             ]
-            .contains(&method_name.as_str())
+                .contains(&method_name.as_str())
             {
                 pairs.insert((action.predecessor_id.clone(), token_id.clone()));
                 if let Some(account_id) = action.args_receiver_id.as_ref() {
@@ -213,7 +228,7 @@ fn extract_nft_pairs(actions: &[ActionRow], events: &[EventRow]) -> HashSet<(Str
                 "nft_mint",
                 "nft_burn",
             ]
-            .contains(&method_name.as_str())
+                .contains(&method_name.as_str())
             {
                 pairs.insert((action.predecessor_id.clone(), token_id.clone()));
                 if let Some(account_id) = action.args_receiver_id.as_ref() {
@@ -250,11 +265,12 @@ fn add_pairs_to_update(
     prefix: &str,
     pairs: HashSet<(String, String)>,
     to_update: &mut HashMap<String, Vec<(String, String)>>,
+    block_height: BlockHeight,
 ) {
     for (account_id, token_id) in pairs {
         to_update
             .entry(format!("{}:{}", prefix, account_id))
             .or_insert_with(Vec::new)
-            .push((token_id, "".to_string()));
+            .push((token_id, block_height.to_string()));
     }
 }
