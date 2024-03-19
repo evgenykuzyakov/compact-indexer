@@ -57,11 +57,16 @@ async fn main() {
         .get(3)
         .map(|arg| arg.parse().unwrap())
         .unwrap_or(usize::MAX);
+    let block_height = env::var("BACKFILL_BLOCK_HEIGHT")
+        .expect("Missing env BACKFILL_BLOCK_HEIGHT")
+        .parse::<BlockHeight>()
+        .expect("Failed to parse BACKFILL_BLOCK_HEIGHT");
 
     let (prefix, env_name) = match command {
         "ft" => ("ft", "FT_CSV_PATH"),
         "stake" => ("st", "STAKE_CSV_PATH"),
         "nft" => ("nf", "NFT_CSV_PATH"),
+        "here" => ("ft", "HERE_CSV_PATH"),
         _ => {
             panic!("Invalid command {:?}, expected ft, nft or stake", command);
         }
@@ -85,7 +90,7 @@ async fn main() {
         account_to_field
             .entry(account_id)
             .or_insert_with(Vec::new)
-            .push((field, "".to_string()));
+            .push((field, block_height.to_string()));
     }
 
     tracing::log::info!(target: PROJECT_ID, "Going to inject {} accounts and {} records", account_to_field.len(), total_records);
