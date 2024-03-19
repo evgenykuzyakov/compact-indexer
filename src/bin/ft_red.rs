@@ -64,7 +64,7 @@ async fn main() {
     let mut write_redis_db = RedisDB::new(Some(
         env::var("WRITE_REDIS_URL").expect("Missing env WRITE_REDIS_URL"),
     ))
-        .await;
+    .await;
 
     let (id, _key_values) = read_redis_db
         .xread(1, FINAL_BLOCKS_KEY, "0")
@@ -167,6 +167,14 @@ fn extract_ft_pairs(actions: &[ActionRow], events: &[EventRow]) -> HashSet<(Stri
         if token_id.ends_with(".poolv1.near") || token_id.ends_with(".pool.near") {
             continue;
         }
+        // Special case for HERE staking contract
+        if token_id == "storage.herewallet.near" {
+            if let Some(method_name) = action.method_name.as_ref() {
+                if ["deposit", "withdraw"].contains(&method_name.as_str()) {
+                    pairs.insert((action.predecessor_id.clone(), token_id.clone()));
+                }
+            }
+        }
         if let Some(method_name) = action.method_name.as_ref() {
             if [
                 "ft_transfer_call",
@@ -177,7 +185,7 @@ fn extract_ft_pairs(actions: &[ActionRow], events: &[EventRow]) -> HashSet<(Stri
                 "near_deposit",
                 "deposit_and_stake",
             ]
-                .contains(&method_name.as_str())
+            .contains(&method_name.as_str())
             {
                 pairs.insert((action.predecessor_id.clone(), token_id.clone()));
                 if let Some(account_id) = action.args_receiver_id.as_ref() {
@@ -228,7 +236,7 @@ fn extract_nft_pairs(actions: &[ActionRow], events: &[EventRow]) -> HashSet<(Str
                 "nft_mint",
                 "nft_burn",
             ]
-                .contains(&method_name.as_str())
+            .contains(&method_name.as_str())
             {
                 pairs.insert((action.predecessor_id.clone(), token_id.clone()));
                 if let Some(account_id) = action.args_receiver_id.as_ref() {
