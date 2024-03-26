@@ -1145,7 +1145,7 @@ dependencies = [
 
 [[package]]
 name = "compact-indexer"
-version = "0.5.2"
+version = "0.6.0"
 dependencies = [
  "actix",
  "actix-rt",
@@ -1160,6 +1160,7 @@ dependencies = [
  "csv",
  "dotenv",
  "flate2",
+ "hex",
  "itertools 0.12.1",
  "near-crypto",
  "near-indexer",

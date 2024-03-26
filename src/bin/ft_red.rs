@@ -5,19 +5,39 @@ mod redis_db;
 use redis_db::RedisDB;
 use std::collections::{HashMap, HashSet};
 use std::env;
+use std::str::FromStr;
 
 use crate::click::{extract_rows, ActionKind, ActionRow, EventRow, ReceiptStatus};
 use dotenv::dotenv;
-use near_indexer::near_primitives::types::BlockHeight;
+use near_crypto::PublicKey;
+use near_indexer::near_primitives::types::{AccountId, BlockHeight};
 use near_indexer::StreamerMessage;
 use tokio::sync::mpsc;
-use tracing_subscriber::fmt::format;
 
 const PROJECT_ID: &str = "ft_red";
 
 const FINAL_BLOCKS_KEY: &str = "final_blocks";
 const BLOCK_KEY: &str = "block";
 const SAFE_OFFSET: u64 = 100;
+
+#[derive(Debug, Eq, PartialEq, Hash)]
+pub struct PairUpdate {
+    account_id: String,
+    token_id: String,
+}
+
+#[derive(Debug, Eq, PartialEq, Hash)]
+pub struct PublicKeyPair {
+    account_id: String,
+    public_key: PublicKey,
+}
+
+#[derive(Debug, Copy, Clone)]
+pub enum PublicKeyUpdateType {
+    AddedFullAccess,
+    AddedLimitedAccessKey,
+    RemovedKey,
+}
 
 async fn start(
     mut last_id: String,
@@ -120,8 +140,10 @@ async fn listen_blocks(mut stream: mpsc::Receiver<StreamerMessage>, mut redis_db
             &mut to_update,
             block_height,
         );
+        let public_key_updates = extract_public_keys(&actions);
 
-        tracing::log::info!(target: PROJECT_ID, "Updating {} accounts", to_update.len());
+        tracing::log::info!(target: PROJECT_ID, "Updating {} accounts, {} keys", to_update.len(), public_key_updates.len());
+        tracing::log::info!(target: PROJECT_ID, "Updating keys {:?}", public_key_updates);
         // tracing::log::info!(target: PROJECT_ID, "Updating accounts {:?}", to_update);
 
         let res: redis::RedisResult<()> = with_retries!(redis_db, |connection| async {
@@ -129,6 +151,29 @@ async fn listen_blocks(mut stream: mpsc::Receiver<StreamerMessage>, mut redis_db
             for (key, fields_data) in &to_update {
                 pipe.cmd("HSET").arg(key).arg(fields_data).ignore();
             }
+            for (pair, update_type) in &public_key_updates {
+                let key = format!("pk:{}", pair.public_key);
+                match update_type {
+                    PublicKeyUpdateType::AddedFullAccess => {
+                        pipe.cmd("HSET")
+                            .arg(key)
+                            .arg(&pair.account_id)
+                            .arg("f")
+                            .ignore();
+                    }
+                    PublicKeyUpdateType::AddedLimitedAccessKey => {
+                        pipe.cmd("HSET")
+                            .arg(key)
+                            .arg(&pair.account_id)
+                            .arg("l")
+                            .ignore();
+                    }
+                    PublicKeyUpdateType::RemovedKey => {
+                        pipe.cmd("HDEL").arg(key).arg(&pair.account_id).ignore();
+                    }
+                }
+            }
+
             pipe.cmd("SET")
                 .arg("meta:latest_block")
                 .arg(block_height)
@@ -140,7 +185,7 @@ async fn listen_blocks(mut stream: mpsc::Receiver<StreamerMessage>, mut redis_db
     }
 }
 
-fn extract_staking_pairs(actions: &[ActionRow]) -> HashSet<(String, String)> {
+fn extract_staking_pairs(actions: &[ActionRow]) -> HashSet<PairUpdate> {
     // Extract matching (account_id, validator_id) for staking changes
     let mut pairs = HashSet::new();
     for action in actions {
@@ -149,14 +194,80 @@ fn extract_staking_pairs(actions: &[ActionRow]) -> HashSet<(String, String)> {
         }
         if action.account_id.ends_with(".poolv1.near") || action.account_id.ends_with(".pool.near")
         {
-            pairs.insert((action.predecessor_id.clone(), action.account_id.clone()));
+            pairs.insert(PairUpdate {
+                account_id: action.predecessor_id.clone(),
+                token_id: action.account_id.clone(),
+            });
         }
     }
 
     pairs
 }
 
-fn extract_ft_pairs(actions: &[ActionRow], events: &[EventRow]) -> HashSet<(String, String)> {
+fn extract_public_keys(actions: &[ActionRow]) -> HashMap<PublicKeyPair, PublicKeyUpdateType> {
+    // Extract matching (account_id, validator_id) for staking changes
+    let mut pairs = HashMap::new();
+    for action in actions {
+        if action.status != ReceiptStatus::Success {
+            continue;
+        }
+        match action.action {
+            ActionKind::AddKey | ActionKind::DeleteKey => {
+                let public_key = PublicKey::from_str(
+                    &action
+                        .public_key
+                        .as_ref()
+                        .expect("Missing PublicKey for AddKey action"),
+                )
+                .expect("Invalid public key");
+                if action.action == ActionKind::AddKey {
+                    pairs.insert(
+                        PublicKeyPair {
+                            account_id: action.account_id.clone(),
+                            public_key,
+                        },
+                        if action.access_key_contract_id.is_none() {
+                            PublicKeyUpdateType::AddedFullAccess
+                        } else {
+                            PublicKeyUpdateType::AddedLimitedAccessKey
+                        },
+                    );
+                } else {
+                    pairs.insert(
+                        PublicKeyPair {
+                            account_id: action.account_id.clone(),
+                            public_key,
+                        },
+                        PublicKeyUpdateType::RemovedKey,
+                    );
+                }
+            }
+            ActionKind::Transfer => {
+                if action.predecessor_id == "system" {
+                    continue;
+                }
+                let account_id =
+                    AccountId::from_str(&action.account_id).expect("Invalid account_id");
+                if account_id.is_implicit() {
+                    let bytes = hex::decode(&account_id.as_str()).expect("Invalid hex");
+                    let public_key = PublicKey::ED25519(bytes.as_slice().try_into().unwrap());
+                    pairs.insert(
+                        PublicKeyPair {
+                            account_id: account_id.to_string(),
+                            public_key,
+                        },
+                        PublicKeyUpdateType::AddedFullAccess,
+                    );
+                }
+            }
+            _ => {}
+        }
+    }
+
+    pairs
+}
+
+fn extract_ft_pairs(actions: &[ActionRow], events: &[EventRow]) -> HashSet<PairUpdate> {
     // Extract matching (account_id, token_id) for FT changes
     let mut pairs = HashSet::new();
     for action in actions {
@@ -171,7 +282,10 @@ fn extract_ft_pairs(actions: &[ActionRow], events: &[EventRow]) -> HashSet<(Stri
         if token_id == "storage.herewallet.near" {
             if let Some(method_name) = action.method_name.as_ref() {
                 if ["deposit", "withdraw"].contains(&method_name.as_str()) {
-                    pairs.insert((action.predecessor_id.clone(), token_id.clone()));
+                    pairs.insert(PairUpdate {
+                        account_id: action.predecessor_id.clone(),
+                        token_id: token_id.clone(),
+                    });
                 }
             }
         }
@@ -187,9 +301,15 @@ fn extract_ft_pairs(actions: &[ActionRow], events: &[EventRow]) -> HashSet<(Stri
             ]
             .contains(&method_name.as_str())
             {
-                pairs.insert((action.predecessor_id.clone(), token_id.clone()));
+                pairs.insert(PairUpdate {
+                    account_id: action.predecessor_id.clone(),
+                    token_id: token_id.clone(),
+                });
                 if let Some(account_id) = action.args_receiver_id.as_ref() {
-                    pairs.insert((account_id.clone(), token_id.clone()));
+                    pairs.insert(PairUpdate {
+                        account_id: account_id.clone(),
+                        token_id: token_id.clone(),
+                    });
                 }
             }
         }
@@ -202,14 +322,23 @@ fn extract_ft_pairs(actions: &[ActionRow], events: &[EventRow]) -> HashSet<(Stri
         if let Some(event_type) = event.event.as_ref() {
             if ["ft_mint", "ft_burn"].contains(&event_type.as_str()) {
                 if let Some(account_id) = event.data_owner_id.as_ref() {
-                    pairs.insert((account_id.clone(), token_id.clone()));
+                    pairs.insert(PairUpdate {
+                        account_id: account_id.clone(),
+                        token_id: token_id.clone(),
+                    });
                 }
             } else if event_type == "ft_transfer" {
                 if let Some(account_id) = event.data_new_owner_id.as_ref() {
-                    pairs.insert((account_id.clone(), token_id.clone()));
+                    pairs.insert(PairUpdate {
+                        account_id: account_id.clone(),
+                        token_id: token_id.clone(),
+                    });
                 }
                 if let Some(account_id) = event.data_old_owner_id.as_ref() {
-                    pairs.insert((account_id.clone(), token_id.clone()));
+                    pairs.insert(PairUpdate {
+                        account_id: account_id.clone(),
+                        token_id: token_id.clone(),
+                    });
                 }
             }
         }
@@ -218,7 +347,7 @@ fn extract_ft_pairs(actions: &[ActionRow], events: &[EventRow]) -> HashSet<(Stri
     pairs
 }
 
-fn extract_nft_pairs(actions: &[ActionRow], events: &[EventRow]) -> HashSet<(String, String)> {
+fn extract_nft_pairs(actions: &[ActionRow], events: &[EventRow]) -> HashSet<PairUpdate> {
     // Extract matching (account_id, token_id) for FT changes
     let mut pairs = HashSet::new();
     for action in actions {
@@ -238,9 +367,15 @@ fn extract_nft_pairs(actions: &[ActionRow], events: &[EventRow]) -> HashSet<(Str
             ]
             .contains(&method_name.as_str())
             {
-                pairs.insert((action.predecessor_id.clone(), token_id.clone()));
+                pairs.insert(PairUpdate {
+                    account_id: action.predecessor_id.clone(),
+                    token_id: token_id.clone(),
+                });
                 if let Some(account_id) = action.args_receiver_id.as_ref() {
-                    pairs.insert((account_id.clone(), token_id.clone()));
+                    pairs.insert(PairUpdate {
+                        account_id: account_id.clone(),
+                        token_id: token_id.clone(),
+                    });
                 }
             }
         }
@@ -253,14 +388,23 @@ fn extract_nft_pairs(actions: &[ActionRow], events: &[EventRow]) -> HashSet<(Str
         if let Some(event_type) = event.event.as_ref() {
             if ["nft_mint", "nft_burn"].contains(&event_type.as_str()) {
                 if let Some(account_id) = event.data_owner_id.as_ref() {
-                    pairs.insert((account_id.clone(), token_id.clone()));
+                    pairs.insert(PairUpdate {
+                        account_id: account_id.clone(),
+                        token_id: token_id.clone(),
+                    });
                 }
             } else if event_type == "nft_transfer" {
                 if let Some(account_id) = event.data_new_owner_id.as_ref() {
-                    pairs.insert((account_id.clone(), token_id.clone()));
+                    pairs.insert(PairUpdate {
+                        account_id: account_id.clone(),
+                        token_id: token_id.clone(),
+                    });
                 }
                 if let Some(account_id) = event.data_old_owner_id.as_ref() {
-                    pairs.insert((account_id.clone(), token_id.clone()));
+                    pairs.insert(PairUpdate {
+                        account_id: account_id.clone(),
+                        token_id: token_id.clone(),
+                    });
                 }
             }
         }
@@ -271,11 +415,15 @@ fn extract_nft_pairs(actions: &[ActionRow], events: &[EventRow]) -> HashSet<(Str
 
 fn add_pairs_to_update(
     prefix: &str,
-    pairs: HashSet<(String, String)>,
+    pairs: HashSet<PairUpdate>,
     to_update: &mut HashMap<String, Vec<(String, String)>>,
     block_height: BlockHeight,
 ) {
-    for (account_id, token_id) in pairs {
+    for PairUpdate {
+        account_id,
+        token_id,
+    } in pairs
+    {
         to_update
             .entry(format!("{}:{}", prefix, account_id))
             .or_insert_with(Vec::new)
