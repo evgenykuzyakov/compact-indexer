@@ -143,7 +143,7 @@ enum PublicKeyUpdateType {
     RemovedKey,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Ord, PartialOrd)]
+#[derive(Debug, Clone, PartialEq, Eq, Ord, PartialOrd, Hash)]
 struct PkPair {
     account_id: String,
     public_key: String,
@@ -156,7 +156,7 @@ struct PkRes {
 }
 
 pub async fn inject_pk(mut write_redis_db: RedisDB, offset: usize, limit: usize) {
-    let mut pairs: BTreeMap<PkPair, PkRes> = BTreeMap::new();
+    let mut pairs: HashMap<PkPair, PkRes> = HashMap::new();
     let mut csv_reader = csv::ReaderBuilder::new().has_headers(false).from_reader(
         std::fs::File::open(env::var("PK_CSV_PATH").expect("Missing env PK_CSV_PATH"))
             .expect("Failed to open the file"),
