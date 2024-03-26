@@ -143,7 +143,7 @@ async fn listen_blocks(mut stream: mpsc::Receiver<StreamerMessage>, mut redis_db
         let public_key_updates = extract_public_keys(&actions);
 
         tracing::log::info!(target: PROJECT_ID, "Updating {} accounts, {} keys", to_update.len(), public_key_updates.len());
-        tracing::log::info!(target: PROJECT_ID, "Updating keys {:?}", public_key_updates);
+        // tracing::log::info!(target: PROJECT_ID, "Updating keys {:?}", public_key_updates);
         // tracing::log::info!(target: PROJECT_ID, "Updating accounts {:?}", to_update);
 
         let res: redis::RedisResult<()> = with_retries!(redis_db, |connection| async {
