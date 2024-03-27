@@ -43,7 +43,8 @@ struct JsonResponse {
 struct FunctionCallResponse {
     // block_hash: String,
     // block_height: u64,
-    result: Vec<u8>,
+    result: Option<Vec<u8>>,
+    // error: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -174,9 +175,11 @@ async fn get_ft_balance(
     let balance = if let Some(res) = response.result {
         let fc: FunctionCallResponse =
             serde_json::from_value(res).map_err(|e| RpcError::InvalidFunctionCallResponse(e))?;
-        let balance: Option<String> = serde_json::from_slice(&fc.result).ok();
-        let parsed_balance: Option<u128> = balance.and_then(|s| s.parse().ok());
-        parsed_balance.map(|b| b.to_string())
+        fc.result.and_then(|result| {
+            let balance: Option<String> = serde_json::from_slice(&result).ok();
+            let parsed_balance: Option<u128> = balance.and_then(|s| s.parse().ok());
+            parsed_balance.map(|b| b.to_string())
+        })
     } else {
         None
     };
