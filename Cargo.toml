@@ -37,6 +37,10 @@ path = "src/bin/export_ft.rs"
 name = "update-balances"
 path = "src/bin/update_balances.rs"
 
+[[bin]]
+name = "balances-backfill"
+path = "src/bin/balances_backfill.rs"
+
 [dependencies]
 actix = "=0.13.0"
 actix-web = "4.3.0"

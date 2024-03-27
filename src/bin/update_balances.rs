@@ -64,7 +64,7 @@ async fn update_balances(redis_db: &mut RedisDB, ft_update: FtUpdate) {
         serde_json::to_writer(f, &ft_update).expect("Failed to write pending update");
     }
     // Fetching balances
-    let balances = get_ft_balances(&ft_update.pairs, ft_update.block_height)
+    let balances = get_ft_balances(&ft_update.pairs, Some(ft_update.block_height))
         .await
         .expect("Failed to get balances");
 

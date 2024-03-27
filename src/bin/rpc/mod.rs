@@ -53,9 +53,9 @@ pub struct PairBalanceUpdate {
     pub balance: Option<String>,
 }
 
-pub(crate) async fn get_ft_balances(
+pub async fn get_ft_balances(
     pairs: &[String],
-    block_height: BlockHeight,
+    block_height: Option<BlockHeight>,
 ) -> Result<Vec<PairBalanceUpdate>, RpcError> {
     let mut balances = Vec::new();
     if pairs.is_empty() {
@@ -146,18 +146,23 @@ async fn get_ft_balance(
     url: &String,
     token_id: &String,
     account_id: &String,
-    block_height: BlockHeight,
+    block_height: Option<BlockHeight>,
 ) -> Result<Option<String>, RpcError> {
+    let mut params = json!({
+        "request_type": "call_function",
+        "account_id": token_id,
+        "method_name": "ft_balance_of",
+        "args_base64": BASE64_STANDARD.encode(format!("{{\"account_id\": \"{}\"}}", account_id)),
+    });
+    if let Some(block_height) = block_height {
+        params["block_id"] = json!(block_height);
+    } else {
+        params["finality"] = json!("final");
+    }
     let request = JsonRequest {
         jsonrpc: "2.0".to_string(),
         method: "query".to_string(),
-        params: json!({
-            "request_type": "call_function",
-            "block_id": block_height,
-            "account_id": token_id,
-            "method_name": "ft_balance_of",
-            "args_base64": BASE64_STANDARD.encode(format!("{{\"account_id\": \"{}\"}}", account_id)),
-        }),
+        params,
         id: "0".to_string(),
     };
     let mut response = client.post(url);
