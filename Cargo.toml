@@ -1,6 +1,6 @@
 [package]
 name = "compact-indexer"
-version = "0.7.2"
+version = "0.8.0"
 authors = ["Eugene The Dream"]
 rust-version = "1.71.0"
 edition = "2021"
@@ -28,6 +28,11 @@ path = "src/bin/inject_ft.rs"
 [[bin]]
 name = "lake-convert"
 path = "src/bin/lake_convert.rs"
+
+[[bin]]
+name = "export-ft"
+path = "src/bin/export_ft.rs"
+
 
 [dependencies]
 actix = "=0.13.0"

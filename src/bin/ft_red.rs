@@ -12,6 +12,7 @@ use dotenv::dotenv;
 use near_crypto::PublicKey;
 use near_indexer::near_primitives::types::{AccountId, BlockHeight};
 use near_indexer::StreamerMessage;
+use serde_json::json;
 use tokio::sync::mpsc;
 
 const PROJECT_ID: &str = "ft_red";
@@ -20,7 +21,7 @@ const FINAL_BLOCKS_KEY: &str = "final_blocks";
 const BLOCK_KEY: &str = "block";
 const SAFE_OFFSET: u64 = 100;
 
-#[derive(Debug, Eq, PartialEq, Hash)]
+#[derive(Debug, Eq, PartialEq, Hash, Clone)]
 pub struct PairUpdate {
     account_id: String,
     token_id: String,
@@ -122,12 +123,9 @@ async fn listen_blocks(mut stream: mpsc::Receiver<StreamerMessage>, mut redis_db
 
         let mut to_update: HashMap<String, Vec<(String, String)>> = HashMap::new();
 
-        add_pairs_to_update(
-            "ft",
-            extract_ft_pairs(&actions, &events),
-            &mut to_update,
-            block_height,
-        );
+        let ft_pairs = extract_ft_pairs(&actions, &events);
+
+        add_pairs_to_update("ft", ft_pairs.clone(), &mut to_update, block_height);
         add_pairs_to_update(
             "nf",
             extract_nft_pairs(&actions, &events),
@@ -177,6 +175,14 @@ async fn listen_blocks(mut stream: mpsc::Receiver<StreamerMessage>, mut redis_db
             pipe.cmd("SET")
                 .arg("meta:latest_block")
                 .arg(block_height)
+                .ignore();
+
+            pipe.cmd("RPUSH")
+                .arg("ft_updates")
+                .arg(json!({
+                    "block_height": block_height,
+                    "pairs": ft_pairs.iter().map(|pair| format!("{}:{}", pair.token_id, pair.account_id)).collect::<Vec<_>>()
+                }).to_string())
                 .ignore();
 
             pipe.query_async(connection).await
