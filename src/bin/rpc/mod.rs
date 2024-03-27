@@ -14,7 +14,7 @@ const TARGET_RPC: &str = "rpc";
 #[derive(Debug)]
 pub enum RpcError {
     ReqwestError(reqwest::Error),
-    InvalidFunctionCallResponse,
+    InvalidFunctionCallResponse(serde_json::Error),
 }
 
 impl From<reqwest::Error> for RpcError {
@@ -173,7 +173,7 @@ async fn get_ft_balance(
     let response = response.json::<JsonResponse>().await?;
     let balance = if let Some(res) = response.result {
         let fc: FunctionCallResponse =
-            serde_json::from_value(res).map_err(|_| RpcError::InvalidFunctionCallResponse)?;
+            serde_json::from_value(res).map_err(|e| RpcError::InvalidFunctionCallResponse(e))?;
         let balance: Option<String> = serde_json::from_slice(&fc.result).ok();
         let parsed_balance: Option<u128> = balance.and_then(|s| s.parse().ok());
         parsed_balance.map(|b| b.to_string())
