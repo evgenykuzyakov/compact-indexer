@@ -74,8 +74,8 @@ async fn main() {
     let mut total_pairs = 0;
     let mut w = csv::Writer::from_writer(f);
     for (i, account_key) in accounts.into_iter().enumerate() {
-        if i % 1000 == 0 {
-            tracing::info!(target: PROJECT_ID, "Exported {} tokens out of {}", i, total_accounts);
+        if i % 10000 == 0 {
+            tracing::info!(target: PROJECT_ID, "Exported {} tokens out of {}. Total pairs: {}", i, total_accounts, total_pairs);
         }
         let res = with_retries!(read_redis_db, |connection| async {
             let res: redis::RedisResult<Vec<(String, String)>> = redis::cmd("HGETALL")

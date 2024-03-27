@@ -1,22 +1,16 @@
-mod click;
 mod common;
 mod redis_db;
+mod rpc;
 
 use redis_db::RedisDB;
-use std::collections::{HashMap, HashSet};
 use std::env;
-use std::str::FromStr;
 
-use crate::click::{extract_rows, ActionKind, ActionRow, EventRow, ReceiptStatus};
+use crate::rpc::{get_ft_balances, PairBalanceUpdate};
 use dotenv::dotenv;
-use near_crypto::PublicKey;
-use near_indexer::near_primitives::types::{AccountId, BlockHeight};
-use near_indexer::StreamerMessage;
-use serde_json::json;
-use tokio::sync::mpsc;
-use tracing_subscriber::fmt::format;
+use near_indexer::near_primitives::types::BlockHeight;
+use serde::{Deserialize, Serialize};
 
-const PROJECT_ID: &str = "export_ft";
+const PROJECT_ID: &str = "update_balances";
 
 #[derive(Debug, Eq, PartialEq, Hash, Clone)]
 pub struct PairUpdate {
@@ -24,72 +18,86 @@ pub struct PairUpdate {
     token_id: String,
 }
 
+#[derive(Debug, Deserialize, Serialize)]
+pub struct FtUpdate {
+    pub block_height: BlockHeight,
+    pub pairs: Vec<String>,
+}
+
 #[tokio::main]
 async fn main() {
     openssl_probe::init_ssl_cert_env_vars();
     dotenv().ok();
 
-    common::setup_tracing("export_ft=info,redis=info");
+    common::setup_tracing("update_balances=info,redis=info,rpc=debug");
 
-    tracing::log::info!(target: PROJECT_ID, "Starting FT Redis Indexer");
+    tracing::log::info!(target: PROJECT_ID, "Starting Balance updater");
 
-    let mut read_redis_db = RedisDB::new(Some(
-        env::var("EXPORT_READ_REDIS_URL").expect("Missing env EXPORT_READ_REDIS_URL"),
+    let mut redis_db = RedisDB::new(Some(
+        env::var("WRITE_REDIS_URL").expect("Missing env WRITE_REDIS_URL"),
     ))
     .await;
 
-    let mut accounts = HashSet::new();
-    let mut cursor = "0".to_string();
-    let mut total_accounts = 0;
-    let mut last_multiplier = 0;
     loop {
-        let res = with_retries!(read_redis_db, |connection| async {
-            let res: redis::RedisResult<(String, Vec<String>)> = redis::cmd("SCAN")
-                .arg(&cursor)
-                .arg("MATCH")
-                .arg("ft:*")
-                .arg("COUNT")
-                .arg(100000)
-                .query_async(connection)
-                .await;
-            res
-        })
-        .expect("Failed to scan keys");
-        let (next_cursor, keys) = res;
-        cursor = next_cursor;
-        total_accounts += keys.len();
-        accounts.extend(keys);
-        let mult = accounts.len() / 100000;
-        if mult > last_multiplier {
-            last_multiplier = mult;
-            tracing::info!(target: PROJECT_ID, "Scanned {} accounts", total_accounts);
-        }
-        if cursor == "0" {
-            break;
+        let ft_updates: redis::RedisResult<Option<String>> =
+            with_retries!(redis_db, |connection| async {
+                redis::cmd("LPOP")
+                    .arg("ft_updates")
+                    .query_async(connection)
+                    .await
+            });
+        let ft_updates = ft_updates.expect("Failed to get ft_updates");
+        if let Some(ft_updates) = ft_updates {
+            let ft_updates: FtUpdate = serde_json::from_str(&ft_updates).expect("Invalid JSON");
+            update_balances(&mut redis_db, ft_updates).await;
+        } else {
+            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
         }
     }
+}
 
-    let export_fn = env::var("EXPORT_FN").expect("Missing env EXPORT_FN");
-    let f = std::fs::File::create(export_fn).expect("Failed to create export file");
-    let mut total_pairs = 0;
-    let mut w = csv::Writer::from_writer(f);
-    for (i, account_key) in accounts.into_iter().enumerate() {
-        if i % 1000 == 0 {
-            tracing::info!(target: PROJECT_ID, "Exported {} tokens out of {}", i, total_accounts);
+async fn update_balances(redis_db: &mut RedisDB, ft_update: FtUpdate) {
+    // Save pending update
+    {
+        let path = env::var("PENDING_UPDATE_FN").expect("PENDING_UPDATE_FN is not set");
+        let f = std::fs::File::create(path).expect("Failed to create pending update file");
+        serde_json::to_writer(f, &ft_update).expect("Failed to write pending update");
+    }
+    // Fetching balances
+    let balances = get_ft_balances(&ft_update.pairs, ft_update.block_height)
+        .await
+        .expect("Failed to get balances");
+
+    // Save balances to redis
+    let res: redis::RedisResult<()> = with_retries!(redis_db, |connection| async {
+        let mut pipe = redis::pipe();
+        for PairBalanceUpdate {
+            account_id,
+            token_id,
+            balance,
+        } in &balances
+        {
+            pipe.cmd("HSET")
+                .arg(format!("b:{}", token_id))
+                .arg(account_id)
+                .arg(balance.as_ref().map(|s| s.as_str()).unwrap_or(""))
+                .ignore();
         }
-        let res = with_retries!(read_redis_db, |connection| async {
-            let res: redis::RedisResult<Vec<(String, String)>> = redis::cmd("HGETALL")
-                .arg(&account_key)
-                .query_async(connection)
-                .await;
-            res
-        })
-        .expect("Failed to get tokens for account");
-        let account_id = account_key.split(':').last().unwrap();
-        total_pairs += res.len();
-        for (token_id, _) in res {
-            w.write_record(&[&token_id, account_id])
-                .expect("Failed to write record");
-        }
+
+        pipe.cmd("SET")
+            .arg("meta:latest_balance_block")
+            .arg(ft_update.block_height)
+            .ignore();
+
+        pipe.query_async(connection).await
+    });
+    res.expect("Failed to update");
+
+    tracing::info!(target: PROJECT_ID, "Updated {} balances for block {}", balances.len(), ft_update.block_height);
+
+    // Delete pending update
+    {
+        let path = env::var("PENDING_UPDATE_FN").expect("PENDING_UPDATE_FN is not set");
+        std::fs::remove_file(path).expect("Failed to remove pending update file");
     }
 }
