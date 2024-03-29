@@ -108,7 +108,7 @@ async fn main() {
         } else {
             // Extracting top holders
             let k = res.len().saturating_sub(max_top_holders_count as usize);
-            res.select_nth_unstable_by(k, my_cmp);
+            res.select_nth_unstable_by(k, |a, b| my_cmp(b, a));
             let mut top_holders = res
                 .split_off(k)
                 .into_iter()
