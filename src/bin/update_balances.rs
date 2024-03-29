@@ -53,12 +53,19 @@ async fn main() {
     };
     assert!(config.max_top_holders_count <= i64::MAX as u64);
 
+    let path = env::var("BACKFILL_FILE").expect("BACKFILL_FILE is not set");
+    if std::path::Path::new(&path).exists() {
+        let f = std::fs::File::open(path).expect("Failed to open backfill file");
+        let ft_update: FtUpdate = serde_json::from_reader(f).expect("Failed to read backfill file");
+        update_balances(&mut redis_db, ft_update, &config, true).await;
+    }
+
     let path = env::var("PENDING_UPDATE_FN").expect("PENDING_UPDATE_FN is not set");
     if std::path::Path::new(&path).exists() {
         let f = std::fs::File::open(path).expect("Failed to open pending update file");
         let ft_update: FtUpdate =
             serde_json::from_reader(f).expect("Failed to read pending update");
-        update_balances(&mut redis_db, ft_update, &config).await;
+        update_balances(&mut redis_db, ft_update, &config, false).await;
     }
 
     loop {
@@ -72,13 +79,18 @@ async fn main() {
             });
         let (_key_name, s) = response.expect("Failed to get ft_updates");
         let ft_updates: FtUpdate = serde_json::from_str(&s).expect("Invalid JSON");
-        update_balances(&mut redis_db, ft_updates, &config).await;
+        update_balances(&mut redis_db, ft_updates, &config, false).await;
     }
 }
 
-async fn update_balances(redis_db: &mut RedisDB, ft_update: FtUpdate, config: &Config) {
+async fn update_balances(
+    redis_db: &mut RedisDB,
+    ft_update: FtUpdate,
+    config: &Config,
+    backfill: bool,
+) {
     // Save pending update
-    {
+    if !backfill {
         let path = env::var("PENDING_UPDATE_FN").expect("PENDING_UPDATE_FN is not set");
         let f = std::fs::File::create(path).expect("Failed to create pending update file");
         serde_json::to_writer(f, &ft_update).expect("Failed to write pending update");
@@ -102,18 +114,18 @@ async fn update_balances(redis_db: &mut RedisDB, ft_update: FtUpdate, config: &C
             balance,
         } in &balances
         {
-            pipe.cmd("HSET")
+            pipe.cmd(if backfill { "HSETNX" } else { "HSET" })
                 .arg(format!("b:{}", token_id))
                 .arg(account_id)
                 .arg(balance.as_ref().map(|s| s.as_str()).unwrap_or(""))
                 .ignore();
 
             if let Some(balance) = balance {
-                pipe.cmd("ZADD")
-                    .arg(format!("tb:{}", token_id))
-                    .arg(balance)
-                    .arg(account_id)
-                    .ignore();
+                pipe.cmd("ZADD").arg(format!("tb:{}", token_id));
+                if backfill {
+                    pipe.arg("NX");
+                }
+                pipe.arg(balance).arg(account_id).ignore();
             }
         }
 
@@ -126,11 +138,12 @@ async fn update_balances(redis_db: &mut RedisDB, ft_update: FtUpdate, config: &C
                 .ignore();
         }
 
-        pipe.cmd("SET")
-            .arg("meta:latest_balance_block")
-            .arg(ft_update.block_height)
-            .ignore();
-
+        if !backfill {
+            pipe.cmd("SET")
+                .arg("meta:latest_balance_block")
+                .arg(ft_update.block_height)
+                .ignore();
+        }
         pipe.query_async(connection).await
     });
     res.expect("Failed to update");
@@ -138,7 +151,7 @@ async fn update_balances(redis_db: &mut RedisDB, ft_update: FtUpdate, config: &C
     tracing::info!(target: PROJECT_ID, "Updated {} balances for block {}", balances.len(), ft_update.block_height);
 
     // Delete pending update
-    {
+    if !backfill {
         let path = env::var("PENDING_UPDATE_FN").expect("PENDING_UPDATE_FN is not set");
         std::fs::remove_file(path).expect("Failed to remove pending update file");
     }
