@@ -281,7 +281,10 @@ fn extract_ft_pairs(actions: &[ActionRow], events: &[EventRow]) -> HashSet<PairU
             continue;
         }
         let token_id = &action.account_id;
-        if token_id.ends_with(".poolv1.near") || token_id.ends_with(".pool.near") {
+        if token_id.ends_with(".poolv1.near")
+            || token_id.ends_with(".pool.near")
+            || token_id.ends_with(".lockup.near")
+        {
             continue;
         }
         // Special case for HERE staking contract

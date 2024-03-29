@@ -100,6 +100,7 @@ async fn main() {
         tracing::info!(target: PROJECT_ID, "Top holders: {:?}", &top_holders.iter().take(10).collect::<Vec<_>>());
 
         if command == "run" {
+            tracing::info!(target: PROJECT_ID, "Updating top holders for token {}", token_id);
             let res: redis::RedisResult<()> = with_retries!(redis_db, |connection| async {
                 let mut pipe = redis::pipe();
                 pipe.cmd("ZADD").arg(format!("tb:{}", token_id)).arg("NX");
