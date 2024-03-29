@@ -53,6 +53,14 @@ async fn main() {
     };
     assert!(config.max_top_holders_count <= i64::MAX as u64);
 
+    let path = env::var("PENDING_UPDATE_FN").expect("PENDING_UPDATE_FN is not set");
+    if std::path::Path::new(&path).exists() {
+        let f = std::fs::File::open(path).expect("Failed to open pending update file");
+        let ft_update: FtUpdate =
+            serde_json::from_reader(f).expect("Failed to read pending update");
+        update_balances(&mut redis_db, ft_update, &config).await;
+    }
+
     loop {
         let response: redis::RedisResult<(String, String)> =
             with_retries!(redis_db, |connection| async {
