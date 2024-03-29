@@ -2,7 +2,7 @@ mod common;
 mod redis_db;
 
 use redis_db::RedisDB;
-use std::collections::{BinaryHeap, HashSet};
+use std::collections::HashSet;
 use std::env;
 
 use dotenv::dotenv;
@@ -76,7 +76,7 @@ async fn main() {
     for (i, token_key) in tokens.into_iter().enumerate() {
         let token_id = token_key.split(':').last().unwrap();
         tracing::info!(target: PROJECT_ID, "Processing token {}/{}: {}", i, total_tokens, token_id);
-        let res = with_retries!(read_redis_db, |connection| async {
+        let mut res = with_retries!(read_redis_db, |connection| async {
             let res: redis::RedisResult<Vec<(String, String)>> = redis::cmd("HGETALL")
                 .arg(&token_key)
                 .query_async(connection)
@@ -107,18 +107,10 @@ async fn main() {
             }
         } else {
             // Extracting top holders
-            let mut heap = BinaryHeap::with_capacity(max_top_holders_count as usize + 1);
-
-            for (account_id, balance) in res {
-                if let Ok(balance) = balance.parse::<u128>() {
-                    heap.push((balance, account_id));
-                    if heap.len() > max_top_holders_count as usize {
-                        heap.pop();
-                    }
-                }
-            }
-
-            let top_holders = heap.into_sorted_vec();
+            let k = res.len().saturating_sub(max_top_holders_count as usize);
+            res.select_nth_unstable_by(k, my_cmp);
+            let mut top_holders = res.split_off(k);
+            top_holders.sort_unstable_by(my_cmp);
             tracing::info!(target: PROJECT_ID, "Top holders: {:?}", &top_holders.iter().take(10).collect::<Vec<_>>());
             if top_holders.is_empty() {
                 continue;
@@ -145,4 +137,10 @@ async fn main() {
             }
         }
     }
+}
+
+fn my_cmp(a: &(String, String), b: &(String, String)) -> std::cmp::Ordering {
+    let balance_a = a.1.parse::<u128>().unwrap_or(0);
+    let balance_b = b.1.parse::<u128>().unwrap_or(0);
+    (balance_b, &b.0).cmp(&(balance_a, &a.0))
 }
