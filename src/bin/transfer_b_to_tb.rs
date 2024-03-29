@@ -120,7 +120,9 @@ async fn main() {
 
             let top_holders = heap.into_sorted_vec();
             tracing::info!(target: PROJECT_ID, "Top holders: {:?}", &top_holders.iter().take(10).collect::<Vec<_>>());
-
+            if top_holders.is_empty() {
+                continue;
+            }
             if command == "run" {
                 tracing::info!(target: PROJECT_ID, "Updating top holders for token {}", token_id);
                 let res: redis::RedisResult<()> = with_retries!(redis_db, |connection| async {
