@@ -22,7 +22,10 @@ async fn main() {
 
     common::setup_tracing("transfer_b_to_tb=info,redis=info");
 
-    tracing::log::info!(target: PROJECT_ID, "Starting FT Redis Indexer");
+    let args: Vec<String> = std::env::args().collect();
+    let command = args.get(1).map(|arg| arg.as_str()).unwrap_or("");
+
+    tracing::log::info!(target: PROJECT_ID, "Starting Transfer backfill for b to tb{}", if command == "run" { "" } else { " (dry run)" });
 
     let mut read_redis_db = RedisDB::new(Some(
         env::var("EXPORT_READ_REDIS_URL").expect("Missing env EXPORT_READ_REDIS_URL"),
@@ -33,9 +36,6 @@ async fn main() {
         env::var("WRITE_REDIS_URL").expect("Missing env WRITE_REDIS_URL"),
     ))
     .await;
-
-    let args: Vec<String> = std::env::args().collect();
-    let command = args.get(1).map(|arg| arg.as_str()).unwrap_or("");
 
     let mut tokens = HashSet::new();
     let mut cursor = "0".to_string();
@@ -84,40 +84,62 @@ async fn main() {
             res
         })
         .expect("Failed to get tokens for account");
-        // Extracting top holders
-        let mut heap = BinaryHeap::with_capacity(max_top_holders_count as usize + 1);
 
-        for (account_id, balance) in res {
-            if let Ok(balance) = balance.parse::<u128>() {
-                heap.push((balance, account_id));
-                if heap.len() > max_top_holders_count as usize {
-                    heap.pop();
+        if token_id.ends_with(".lockup.near") {
+            // Bad tokens. Need to remove them
+            tracing::info!(target: PROJECT_ID, "Removing token holders for {}", token_id);
+            if command == "run" {
+                let res: redis::RedisResult<()> = with_retries!(redis_db, |connection| async {
+                    let mut pipe = redis::pipe();
+                    for (account_id, _) in &res {
+                        pipe.cmd("HDEL")
+                            .arg(format!("ft:{}", token_id))
+                            .arg(account_id)
+                            .ignore();
+                    }
+                    pipe.cmd("DEL").arg(format!("b:{}", token_id)).ignore();
+                    pipe.cmd("DEL").arg(format!("tb:{}", token_id)).ignore();
+
+                    pipe.query_async(connection).await
+                });
+                res.expect("Failed to remove");
+            }
+        } else {
+            // Extracting top holders
+            let mut heap = BinaryHeap::with_capacity(max_top_holders_count as usize + 1);
+
+            for (account_id, balance) in res {
+                if let Ok(balance) = balance.parse::<u128>() {
+                    heap.push((balance, account_id));
+                    if heap.len() > max_top_holders_count as usize {
+                        heap.pop();
+                    }
                 }
             }
-        }
 
-        let top_holders = heap.into_sorted_vec();
-        tracing::info!(target: PROJECT_ID, "Top holders: {:?}", &top_holders.iter().take(10).collect::<Vec<_>>());
+            let top_holders = heap.into_sorted_vec();
+            tracing::info!(target: PROJECT_ID, "Top holders: {:?}", &top_holders.iter().take(10).collect::<Vec<_>>());
 
-        if command == "run" {
-            tracing::info!(target: PROJECT_ID, "Updating top holders for token {}", token_id);
-            let res: redis::RedisResult<()> = with_retries!(redis_db, |connection| async {
-                let mut pipe = redis::pipe();
-                pipe.cmd("ZADD").arg(format!("tb:{}", token_id)).arg("NX");
-                for (balance, account_id) in &top_holders {
-                    pipe.arg(balance.to_string()).arg(account_id).ignore();
-                }
+            if command == "run" {
+                tracing::info!(target: PROJECT_ID, "Updating top holders for token {}", token_id);
+                let res: redis::RedisResult<()> = with_retries!(redis_db, |connection| async {
+                    let mut pipe = redis::pipe();
+                    pipe.cmd("ZADD").arg(format!("tb:{}", token_id)).arg("NX");
+                    for (balance, account_id) in &top_holders {
+                        pipe.arg(balance.to_string()).arg(account_id).ignore();
+                    }
 
-                // Keeping sorted sets lengths to a fixed size
-                pipe.cmd("ZREMRANGEBYRANK")
-                    .arg(format!("tb:{}", token_id))
-                    .arg(0)
-                    .arg(-(max_top_holders_count as i64 + 1))
-                    .ignore();
+                    // Keeping sorted sets lengths to a fixed size
+                    pipe.cmd("ZREMRANGEBYRANK")
+                        .arg(format!("tb:{}", token_id))
+                        .arg(0)
+                        .arg(-(max_top_holders_count as i64 + 1))
+                        .ignore();
 
-                pipe.query_async(connection).await
-            });
-            res.expect("Failed to update");
+                    pipe.query_async(connection).await
+                });
+                res.expect("Failed to update");
+            }
         }
     }
 }
