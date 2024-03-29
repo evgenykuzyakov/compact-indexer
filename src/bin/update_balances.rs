@@ -3,6 +3,7 @@ mod redis_db;
 mod rpc;
 
 use redis_db::RedisDB;
+use std::collections::HashSet;
 use std::env;
 
 use crate::rpc::{get_ft_balances, PairBalanceUpdate};
@@ -24,6 +25,11 @@ pub struct FtUpdate {
     pub pairs: Vec<String>,
 }
 
+pub struct Config {
+    pub max_top_holders_count: u64,
+    pub rpc_config: rpc::RpcConfig,
+}
+
 #[tokio::main]
 async fn main() {
     openssl_probe::init_ssl_cert_env_vars();
@@ -38,25 +44,31 @@ async fn main() {
     ))
     .await;
 
+    let config = Config {
+        max_top_holders_count: env::var("MAX_TOP_HOLDERS_COUNT")
+            .unwrap_or("1000".to_string())
+            .parse()
+            .expect("Invalid MAX_TOP_HOLDERS_COUNT"),
+        rpc_config: rpc::RpcConfig::from_env(),
+    };
+    assert!(config.max_top_holders_count <= i64::MAX as u64);
+
     loop {
-        let ft_updates: redis::RedisResult<Option<String>> =
+        let response: redis::RedisResult<(String, String)> =
             with_retries!(redis_db, |connection| async {
-                redis::cmd("LPOP")
+                redis::cmd("BLPOP")
                     .arg("ft_updates")
+                    .arg(0)
                     .query_async(connection)
                     .await
             });
-        let ft_updates = ft_updates.expect("Failed to get ft_updates");
-        if let Some(ft_updates) = ft_updates {
-            let ft_updates: FtUpdate = serde_json::from_str(&ft_updates).expect("Invalid JSON");
-            update_balances(&mut redis_db, ft_updates).await;
-        } else {
-            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-        }
+        let (_key_name, s) = response.expect("Failed to get ft_updates");
+        let ft_updates: FtUpdate = serde_json::from_str(&s).expect("Invalid JSON");
+        update_balances(&mut redis_db, ft_updates, &config).await;
     }
 }
 
-async fn update_balances(redis_db: &mut RedisDB, ft_update: FtUpdate) {
+async fn update_balances(redis_db: &mut RedisDB, ft_update: FtUpdate, config: &Config) {
     // Save pending update
     {
         let path = env::var("PENDING_UPDATE_FN").expect("PENDING_UPDATE_FN is not set");
@@ -64,10 +76,15 @@ async fn update_balances(redis_db: &mut RedisDB, ft_update: FtUpdate) {
         serde_json::to_writer(f, &ft_update).expect("Failed to write pending update");
     }
     // Fetching balances
-    let balances = get_ft_balances(&ft_update.pairs, Some(ft_update.block_height))
-        .await
-        .expect("Failed to get balances");
+    let balances = get_ft_balances(
+        &ft_update.pairs,
+        Some(ft_update.block_height),
+        &config.rpc_config,
+    )
+    .await
+    .expect("Failed to get balances");
 
+    let all_tokens: HashSet<String> = balances.iter().map(|b| b.token_id.clone()).collect();
     // Save balances to redis
     let res: redis::RedisResult<()> = with_retries!(redis_db, |connection| async {
         let mut pipe = redis::pipe();
@@ -81,6 +98,23 @@ async fn update_balances(redis_db: &mut RedisDB, ft_update: FtUpdate) {
                 .arg(format!("b:{}", token_id))
                 .arg(account_id)
                 .arg(balance.as_ref().map(|s| s.as_str()).unwrap_or(""))
+                .ignore();
+
+            if let Some(balance) = balance {
+                pipe.cmd("ZADD")
+                    .arg(format!("tb:{}", token_id))
+                    .arg(balance)
+                    .arg(account_id)
+                    .ignore();
+            }
+        }
+
+        // Keeping sorted sets lengths to a fixed size
+        for token_id in &all_tokens {
+            pipe.cmd("ZREMRANGEBYRANK")
+                .arg(format!("tb:{}", token_id))
+                .arg(0)
+                .arg(-(config.max_top_holders_count as i64 + 1))
                 .ignore();
         }
 

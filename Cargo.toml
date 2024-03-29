@@ -1,6 +1,6 @@
 [package]
 name = "compact-indexer"
-version = "0.8.1"
+version = "0.9.0"
 authors = ["Eugene The Dream"]
 rust-version = "1.71.0"
 edition = "2021"
@@ -40,6 +40,10 @@ path = "src/bin/update_balances.rs"
 [[bin]]
 name = "balances-backfill"
 path = "src/bin/balances_backfill.rs"
+
+[[bin]]
+name = "transfer-b-to-tb"
+path = "src/bin/transfer_b_to_tb.rs"
 
 [dependencies]
 actix = "=0.13.0"

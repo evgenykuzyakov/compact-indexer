@@ -50,27 +50,33 @@ async fn main() {
 
     tracing::log::info!(target: PROJECT_ID, "Starting Balance backfill");
 
+    let rpc_config = rpc::RpcConfig::from_env();
+
     let redis_db = RedisDB::new(Some(
         env::var("WRITE_REDIS_URL").expect("Missing env WRITE_REDIS_URL"),
     ))
     .await;
 
     let stream = streamer();
-    process_balances(stream, redis_db).await;
+    process_balances(stream, redis_db, &rpc_config).await;
 }
 
-async fn process_balances(mut stream: mpsc::Receiver<Vec<String>>, mut redis_db: RedisDB) {
+async fn process_balances(
+    mut stream: mpsc::Receiver<Vec<String>>,
+    mut redis_db: RedisDB,
+    rpc_config: &rpc::RpcConfig,
+) {
     let mut total_pairs = 0;
     while let Some(pairs) = stream.recv().await {
         total_pairs += pairs.len();
-        update_balances(&mut redis_db, pairs).await;
+        update_balances(&mut redis_db, pairs, rpc_config).await;
         tracing::info!(target: PROJECT_ID, "Processed {} pairs", total_pairs);
     }
 }
 
-async fn update_balances(redis_db: &mut RedisDB, pairs: Vec<String>) {
+async fn update_balances(redis_db: &mut RedisDB, pairs: Vec<String>, rpc_config: &rpc::RpcConfig) {
     // Fetching balances
-    let balances = get_ft_balances(&pairs, None)
+    let balances = get_ft_balances(&pairs, None, rpc_config)
         .await
         .expect("Failed to get balances");
 

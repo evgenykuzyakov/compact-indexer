@@ -54,9 +54,41 @@ pub struct PairBalanceUpdate {
     pub balance: Option<String>,
 }
 
+#[derive(Debug, Clone)]
+pub struct RpcConfig {
+    pub rpcs: Vec<String>,
+    pub concurrency: usize,
+    pub bearer_token: Option<String>,
+    pub timeout: Duration,
+}
+
+impl RpcConfig {
+    pub fn from_env() -> Self {
+        let config = RpcConfig {
+            rpcs: env::var("RPCS")
+                .expect("Missing env RPCS")
+                .split(",")
+                .map(|s| s.to_string())
+                .collect(),
+            concurrency: env::var("RPC_CONCURRENCY")
+                .unwrap_or("100".to_string())
+                .parse()
+                .unwrap(),
+            bearer_token: env::var("RPC_BEARER_TOKEN").ok(),
+            timeout: env::var("RPC_TIMEOUT")
+                .map(|s| Duration::from_millis(s.parse().unwrap()))
+                .unwrap_or(RPC_TIMEOUT),
+        };
+        assert!(config.concurrency > 0);
+        assert!(config.rpcs.len() > 0);
+        config
+    }
+}
+
 pub async fn get_ft_balances(
     pairs: &[String],
     block_height: Option<BlockHeight>,
+    rpc_config: &RpcConfig,
 ) -> Result<Vec<PairBalanceUpdate>, RpcError> {
     let mut balances = Vec::new();
     if pairs.is_empty() {
@@ -64,18 +96,8 @@ pub async fn get_ft_balances(
     }
     let start = std::time::Instant::now();
     let client = Client::new();
-    let (tx, mut rx) = mpsc::channel::<Result<PairBalanceUpdate, RpcError>>(
-        env::var("RPC_CONCURRENCY")
-            .unwrap_or("100".to_string())
-            .parse()
-            .unwrap(),
-    );
-    let rpcs = env::var("RPCS")
-        .expect("Missing env RPCS")
-        .split(",")
-        .map(|s| s.to_string())
-        .collect::<Vec<_>>();
-    assert!(rpcs.len() > 0);
+    let (tx, mut rx) = mpsc::channel::<Result<PairBalanceUpdate, RpcError>>(rpc_config.concurrency);
+    let rpcs = &rpc_config.rpcs;
 
     for (i, pair) in pairs.iter().enumerate() {
         let client = client.clone();
@@ -84,6 +106,8 @@ pub async fn get_ft_balances(
         let rpcs = rpcs.clone();
         let token_id = token_id.to_string();
         let account_id = account_id.to_string();
+        let bearer_token = rpc_config.bearer_token.clone();
+        let timeout = rpc_config.timeout;
 
         // Spawn a new asynchronous task for each request
         task::spawn(async move {
@@ -92,7 +116,16 @@ pub async fn get_ft_balances(
             let res = loop {
                 let url = &rpcs[index % rpcs.len()];
                 index += 1;
-                let res = get_ft_balance(&client, &url, &token_id, &account_id, block_height).await;
+                let res = get_ft_balance(
+                    &client,
+                    &url,
+                    &token_id,
+                    &account_id,
+                    block_height,
+                    &bearer_token,
+                    timeout,
+                )
+                .await;
 
                 match res {
                     Ok(balance) => {
@@ -148,6 +181,8 @@ async fn get_ft_balance(
     token_id: &String,
     account_id: &String,
     block_height: Option<BlockHeight>,
+    bearer_token: &Option<String>,
+    timeout: Duration,
 ) -> Result<Option<String>, RpcError> {
     let mut params = json!({
         "request_type": "call_function",
@@ -167,10 +202,10 @@ async fn get_ft_balance(
         id: "0".to_string(),
     };
     let mut response = client.post(url);
-    if let Ok(bearer) = env::var("RPC_BEARER_TOKEN") {
+    if let Some(bearer) = bearer_token {
         response = response.bearer_auth(bearer);
     }
-    let response = response.json(&request).timeout(RPC_TIMEOUT).send().await?;
+    let response = response.json(&request).timeout(timeout).send().await?;
     let response = response.json::<JsonResponse>().await?;
     let balance = if let Some(res) = response.result {
         let fc: FunctionCallResponse =
