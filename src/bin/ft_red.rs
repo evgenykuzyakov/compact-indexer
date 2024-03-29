@@ -81,6 +81,9 @@ async fn main() {
 
     tracing::log::info!(target: PROJECT_ID, "Starting FT Redis Indexer");
 
+    let args: Vec<String> = std::env::args().collect();
+    let command = args.get(1).map(|arg| arg.as_str()).unwrap_or("");
+
     let mut read_redis_db = RedisDB::new(None).await;
     let mut write_redis_db = RedisDB::new(Some(
         env::var("WRITE_REDIS_URL").expect("Missing env WRITE_REDIS_URL"),
@@ -96,6 +99,49 @@ async fn main() {
         .unwrap();
     let first_block_height: BlockHeight = id.split_once("-").unwrap().0.parse().unwrap();
     tracing::log::info!(target: PROJECT_ID, "First redis block {}", first_block_height);
+
+    if command == "backfill" {
+        let block_height: BlockHeight = env::args()
+            .nth(2)
+            .expect("Missing block height")
+            .parse()
+            .expect("Invalid block height");
+        tracing::log::info!(target: PROJECT_ID, "Backfilling block {}", block_height);
+
+        if first_block_height > block_height {
+            panic!("Too late to backfill");
+        }
+
+        let id = format!("{}-0", block_height - 1);
+        let res = read_redis_db
+            .xread(1, FINAL_BLOCKS_KEY, &id)
+            .await
+            .expect("Failed to get the block");
+        let (_, key_values) = res.into_iter().next().unwrap();
+        assert_eq!(key_values.len(), 1, "Expected 1 key-value pair");
+        let (key, value) = key_values.into_iter().next().unwrap();
+        assert_eq!(key, BLOCK_KEY, "Expected key to be block");
+        let streamer_message: StreamerMessage = serde_json::from_str(&value).unwrap();
+
+        let block_height = streamer_message.block.header.height;
+        tracing::log::info!(target: PROJECT_ID, "Processing block: {}", block_height);
+        let (actions, events) = extract_rows(streamer_message);
+
+        let ft_pairs = extract_ft_pairs(&actions, &events);
+
+        {
+            let path = env::var("BACKFILL_FILE").expect("BACKFILL_FILE is not set");
+            let f = std::fs::File::create(path).expect("Failed to create backfill file");
+            serde_json::to_writer(f, &json!({
+                "block_height": block_height,
+                "pairs": ft_pairs.iter().map(|pair| format!("{}:{}", pair.token_id, pair.account_id)).collect::<Vec<_>>()
+            })).expect("Failed to write backfill file");
+        }
+        return;
+    }
+    if command != "run" {
+        panic!("Invalid command");
+    }
 
     let last_block_height: BlockHeight = write_redis_db
         .get("meta:latest_block")
