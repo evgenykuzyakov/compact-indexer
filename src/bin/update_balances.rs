@@ -148,10 +148,13 @@ async fn update_balances(
     });
     res.expect("Failed to update");
 
-    tracing::info!(target: PROJECT_ID, "Updated {} balances for block {}", balances.len(), ft_update.block_height);
+    tracing::info!(target: PROJECT_ID, "Updated {} balances for block {}{}", balances.len(), ft_update.block_height, if backfill { " (backfill)" } else { "" });
 
     // Delete pending update
-    if !backfill {
+    if backfill {
+        let path = env::var("BACKFILL_FILE").expect("BACKFILL_FILE is not set");
+        std::fs::remove_file(path).expect("Failed to remove backfill file");
+    } else {
         let path = env::var("PENDING_UPDATE_FN").expect("PENDING_UPDATE_FN is not set");
         std::fs::remove_file(path).expect("Failed to remove pending update file");
     }
