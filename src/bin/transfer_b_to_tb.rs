@@ -85,6 +85,7 @@ async fn main() {
         })
         .expect("Failed to get tokens for account");
 
+        tracing::info!(target: PROJECT_ID, "Total holders: {}", res.len());
         if token_id.ends_with(".lockup.near") {
             // Bad tokens. Need to remove them
             tracing::info!(target: PROJECT_ID, "Removing token holders for {}", token_id);
@@ -93,8 +94,8 @@ async fn main() {
                     let mut pipe = redis::pipe();
                     for (account_id, _) in &res {
                         pipe.cmd("HDEL")
-                            .arg(format!("ft:{}", token_id))
-                            .arg(account_id)
+                            .arg(format!("ft:{}", account_id))
+                            .arg(token_id)
                             .ignore();
                     }
                     pipe.cmd("DEL").arg(format!("b:{}", token_id)).ignore();
