@@ -109,7 +109,11 @@ async fn main() {
             // Extracting top holders
             let k = res.len().saturating_sub(max_top_holders_count as usize);
             res.select_nth_unstable_by(k, my_cmp);
-            let mut top_holders = res.split_off(k);
+            let mut top_holders = res
+                .split_off(k)
+                .into_iter()
+                .filter(|(_, balance)| balance.parse::<u128>().is_ok())
+                .collect::<Vec<_>>();
             top_holders.sort_unstable_by(my_cmp);
             tracing::info!(target: PROJECT_ID, "Top holders: {:?}", &top_holders.iter().take(10).collect::<Vec<_>>());
             if top_holders.is_empty() {
@@ -120,8 +124,8 @@ async fn main() {
                 let res: redis::RedisResult<()> = with_retries!(redis_db, |connection| async {
                     let mut pipe = redis::pipe();
                     pipe.cmd("ZADD").arg(format!("tb:{}", token_id)).arg("NX");
-                    for (balance, account_id) in &top_holders {
-                        pipe.arg(balance.to_string()).arg(account_id).ignore();
+                    for (account_id, balance) in &top_holders {
+                        pipe.arg(balance).arg(account_id).ignore();
                     }
 
                     // Keeping sorted sets lengths to a fixed size
