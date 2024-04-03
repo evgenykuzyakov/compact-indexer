@@ -335,51 +335,55 @@ fn extract_ft_pairs(actions: &[ActionRow], events: &[EventRow]) -> HashSet<PairU
         {
             continue;
         }
+        if action.method_name.is_none() {
+            continue;
+        }
+        let method_name = action.method_name.as_ref().unwrap();
         // Special case for HERE staking contract
         if token_id == "storage.herewallet.near" {
-            if let Some(method_name) = action.method_name.as_ref() {
-                if ["deposit", "withdraw"].contains(&method_name.as_str()) {
-                    pairs.insert(PairUpdate {
-                        account_id: action.predecessor_id.clone(),
-                        token_id: token_id.clone(),
-                    });
-                }
-            }
-        }
-        if token_id.ends_with(".factory.bridge.near") {
-            if let Some(method_name) = action.method_name.as_ref() {
-                if ["mint", "burn"].contains(&method_name.as_str()) {
-                    if let Some(account_id) = action.args_account_id.as_ref() {
-                        pairs.insert(PairUpdate {
-                            account_id: account_id.clone(),
-                            token_id: token_id.clone(),
-                        });
-                    }
-                }
-            }
-        }
-        if let Some(method_name) = action.method_name.as_ref() {
-            if [
-                "ft_transfer_call",
-                "ft_transfer",
-                "ft_mint",
-                "ft_burn",
-                "near_withdraw",
-                "near_deposit",
-                "deposit_and_stake",
-            ]
-            .contains(&method_name.as_str())
-            {
+            if ["deposit", "withdraw"].contains(&method_name.as_str()) {
                 pairs.insert(PairUpdate {
                     account_id: action.predecessor_id.clone(),
                     token_id: token_id.clone(),
                 });
-                if let Some(account_id) = action.args_receiver_id.as_ref() {
+            }
+        }
+        if token_id.ends_with(".factory.bridge.near") || token_id == "aurora" {
+            if ["mint", "burn"].contains(&method_name.as_str()) {
+                if let Some(account_id) = action.args_account_id.as_ref() {
                     pairs.insert(PairUpdate {
                         account_id: account_id.clone(),
                         token_id: token_id.clone(),
                     });
                 }
+            }
+            if method_name == "withdraw" {
+                pairs.insert(PairUpdate {
+                    account_id: action.predecessor_id.clone(),
+                    token_id: token_id.clone(),
+                });
+            }
+        }
+        if [
+            "ft_transfer_call",
+            "ft_transfer",
+            "ft_mint",
+            "ft_burn",
+            "near_withdraw",
+            "near_deposit",
+            "deposit_and_stake",
+        ]
+        .contains(&method_name.as_str())
+        {
+            pairs.insert(PairUpdate {
+                account_id: action.predecessor_id.clone(),
+                token_id: token_id.clone(),
+            });
+            if let Some(account_id) = action.args_receiver_id.as_ref() {
+                pairs.insert(PairUpdate {
+                    account_id: account_id.clone(),
+                    token_id: token_id.clone(),
+                });
             }
         }
     }
