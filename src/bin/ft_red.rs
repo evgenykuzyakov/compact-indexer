@@ -170,6 +170,7 @@ async fn listen_blocks(mut stream: mpsc::Receiver<StreamerMessage>, mut redis_db
         let mut to_update: HashMap<String, Vec<(String, String)>> = HashMap::new();
 
         let ft_pairs = extract_ft_pairs(&actions, &events);
+        let accounts = extract_all_accounts(&actions);
 
         add_pairs_to_update("ft", ft_pairs.clone(), &mut to_update, block_height);
         add_pairs_to_update(
@@ -227,7 +228,8 @@ async fn listen_blocks(mut stream: mpsc::Receiver<StreamerMessage>, mut redis_db
                 .arg("ft_updates")
                 .arg(json!({
                     "block_height": block_height,
-                    "pairs": ft_pairs.iter().map(|pair| format!("{}:{}", pair.token_id, pair.account_id)).collect::<Vec<_>>()
+                    "pairs": ft_pairs.iter().map(|pair| format!("{}:{}", pair.token_id, pair.account_id)).collect::<Vec<_>>(),
+                    "accounts": &accounts
                 }).to_string())
                 .ignore();
 
@@ -341,6 +343,18 @@ fn extract_ft_pairs(actions: &[ActionRow], events: &[EventRow]) -> HashSet<PairU
                         account_id: action.predecessor_id.clone(),
                         token_id: token_id.clone(),
                     });
+                }
+            }
+        }
+        if token_id.ends_with(".factory.bridge.near") {
+            if let Some(method_name) = action.method_name.as_ref() {
+                if ["mint", "burn"].contains(&method_name.as_str()) {
+                    if let Some(account_id) = action.args_account_id.as_ref() {
+                        pairs.insert(PairUpdate {
+                            account_id: account_id.clone(),
+                            token_id: token_id.clone(),
+                        });
+                    }
                 }
             }
         }
@@ -484,4 +498,17 @@ fn add_pairs_to_update(
             .or_insert_with(Vec::new)
             .push((token_id, block_height.to_string()));
     }
+}
+
+fn extract_all_accounts(actions: &[ActionRow]) -> HashSet<String> {
+    actions
+        .iter()
+        .filter_map(|action| {
+            if action.status == ReceiptStatus::Success {
+                Some(action.account_id.clone())
+            } else {
+                None
+            }
+        })
+        .collect()
 }

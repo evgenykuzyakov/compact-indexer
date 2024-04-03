@@ -1,4 +1,5 @@
 use base64::prelude::*;
+use near_indexer::near_primitives::serialize::dec_format;
 use near_indexer::near_primitives::types::BlockHeight;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -10,11 +11,14 @@ use tokio::task;
 
 const RPC_TIMEOUT: Duration = Duration::from_millis(5000);
 const TARGET_RPC: &str = "rpc";
+const RPC_ERROR_UNKNOWN_BLOCK: &str = "UNKNOWN_BLOCK";
 
 #[derive(Debug)]
 pub enum RpcError {
     ReqwestError(reqwest::Error),
     InvalidFunctionCallResponse(serde_json::Error),
+    InvalidAccountStateResponse(serde_json::Error),
+    UnknownBlock,
 }
 
 impl From<reqwest::Error> for RpcError {
@@ -36,7 +40,20 @@ struct JsonResponse {
     // id: String,
     // jsonrpc: String,
     result: Option<Value>,
-    // error: Option<Value>,
+    error: Option<JsonRpcError>,
+}
+
+#[derive(Deserialize)]
+struct JsonRpcErrorCause {
+    // info: Option<Value>,
+    name: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct JsonRpcError {
+    cause: Option<JsonRpcErrorCause>,
+    // code: i64,
+    // data: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -47,11 +64,14 @@ struct FunctionCallResponse {
     // error: Option<String>,
 }
 
-#[derive(Debug, Clone)]
-pub struct PairBalanceUpdate {
-    pub account_id: String,
-    pub token_id: String,
-    pub balance: Option<String>,
+#[derive(Deserialize)]
+struct AccountStateResponse {
+    #[serde(with = "dec_format")]
+    amount: u128,
+    #[serde(with = "dec_format")]
+    locked: u128,
+    storage_usage: u64,
+    // error: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -60,6 +80,64 @@ pub struct RpcConfig {
     pub concurrency: usize,
     pub bearer_token: Option<String>,
     pub timeout: Duration,
+}
+
+#[derive(Debug, Clone)]
+pub enum RpcTask {
+    FtPair {
+        block_height: Option<BlockHeight>,
+        account_id: String,
+        token_id: String,
+    },
+    AccountState {
+        block_height: Option<BlockHeight>,
+        account_id: String,
+    },
+}
+
+#[derive(Debug, Clone)]
+pub struct RpcFtPairResult {
+    pub balance: u128,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RpcAccountStateResult {
+    #[serde(with = "dec_format")]
+    #[serde(rename = "b")]
+    pub balance: u128,
+    #[serde(with = "dec_format")]
+    #[serde(rename = "l")]
+    pub locked: u128,
+    #[serde(rename = "s")]
+    pub storage_bytes: u64,
+}
+
+#[derive(Debug, Clone)]
+pub enum RpcTaskResult {
+    FtPair(RpcFtPairResult),
+    AccountState(RpcAccountStateResult),
+}
+
+impl RpcTaskResult {
+    pub fn unwrap_as_ft_pair(&self) -> &RpcFtPairResult {
+        match &self {
+            RpcTaskResult::FtPair(r) => r,
+            _ => panic!("Not FtPair"),
+        }
+    }
+
+    pub fn unwrap_as_account_state(&self) -> &RpcAccountStateResult {
+        match &self {
+            RpcTaskResult::AccountState(r) => r,
+            _ => panic!("Not AccountState"),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct RpcResultPair {
+    pub task: RpcTask,
+    pub result: Option<RpcTaskResult>,
 }
 
 impl RpcConfig {
@@ -85,27 +163,24 @@ impl RpcConfig {
     }
 }
 
-pub async fn get_ft_balances(
-    pairs: &[String],
-    block_height: Option<BlockHeight>,
+pub async fn fetch_from_rpc(
+    tasks: &[RpcTask],
     rpc_config: &RpcConfig,
-) -> Result<Vec<PairBalanceUpdate>, RpcError> {
-    let mut balances = Vec::new();
-    if pairs.is_empty() {
-        return Ok(balances);
+) -> Result<Vec<RpcResultPair>, RpcError> {
+    let mut results = Vec::new();
+    if tasks.is_empty() {
+        return Ok(results);
     }
     let start = std::time::Instant::now();
     let client = Client::new();
-    let (tx, mut rx) = mpsc::channel::<Result<PairBalanceUpdate, RpcError>>(rpc_config.concurrency);
+    let (tx, mut rx) = mpsc::channel::<Result<RpcResultPair, RpcError>>(rpc_config.concurrency);
     let rpcs = &rpc_config.rpcs;
 
-    for (i, pair) in pairs.iter().enumerate() {
+    for (i, task) in tasks.iter().enumerate() {
         let client = client.clone();
         let tx = tx.clone();
-        let (token_id, account_id) = pair.split_once(':').unwrap();
         let rpcs = rpcs.clone();
-        let token_id = token_id.to_string();
-        let account_id = account_id.to_string();
+        let task = task.clone();
         let bearer_token = rpc_config.bearer_token.clone();
         let timeout = rpc_config.timeout;
 
@@ -113,27 +188,15 @@ pub async fn get_ft_balances(
         task::spawn(async move {
             let mut index = i;
             let mut iterations = rpcs.len();
+            let mut sleep = Duration::from_millis(100);
             let res = loop {
                 let url = &rpcs[index % rpcs.len()];
                 index += 1;
-                let res = get_ft_balance(
-                    &client,
-                    &url,
-                    &token_id,
-                    &account_id,
-                    block_height,
-                    &bearer_token,
-                    timeout,
-                )
-                .await;
+                let res = execute_task(&client, &url, &task, &bearer_token, timeout).await;
 
                 match res {
-                    Ok(balance) => {
-                        break Ok(PairBalanceUpdate {
-                            account_id: account_id.clone(),
-                            token_id: token_id.clone(),
-                            balance,
-                        });
+                    Ok(result) => {
+                        break Ok(RpcResultPair { task, result });
                     }
                     Err(e) => {
                         tracing::warn!(target: TARGET_RPC, "RPC Error: {:?}", e);
@@ -142,10 +205,12 @@ pub async fn get_ft_balances(
                         if iterations == 0 {
                             break Err(e);
                         }
+                        tokio::time::sleep(sleep).await;
+                        sleep *= 2;
                     }
                 }
             };
-            tx.send(res).await.expect("Failed to send balance");
+            tx.send(res).await.expect("Failed to send task result");
         });
     }
 
@@ -156,7 +221,7 @@ pub async fn get_ft_balances(
     // Wait for all tasks to complete
     while let Some(res) = rx.recv().await {
         match res {
-            Ok(pair) => balances.push(pair),
+            Ok(pair) => results.push(pair),
             Err(e) => {
                 errors.push(e);
             }
@@ -164,34 +229,82 @@ pub async fn get_ft_balances(
     }
     let duration = start.elapsed().as_millis();
 
-    tracing::debug!(target: TARGET_RPC, "Query {}ms: get_ft_balances {} pairs",
+    tracing::debug!(target: TARGET_RPC, "Query {}ms: fetch_from_rpc {} tasks",
         duration,
-        pairs.len());
+        tasks.len());
 
     if let Some(err) = errors.pop() {
         return Err(err);
     }
 
-    Ok(balances)
+    Ok(results)
 }
 
-async fn get_ft_balance(
+async fn execute_task(
     client: &Client,
     url: &String,
-    token_id: &String,
-    account_id: &String,
-    block_height: Option<BlockHeight>,
+    task: &RpcTask,
     bearer_token: &Option<String>,
     timeout: Duration,
-) -> Result<Option<String>, RpcError> {
-    let mut params = json!({
-        "request_type": "call_function",
-        "account_id": token_id,
-        "method_name": "ft_balance_of",
-        "args_base64": BASE64_STANDARD.encode(format!("{{\"account_id\": \"{}\"}}", account_id)),
-    });
+) -> Result<Option<RpcTaskResult>, RpcError> {
+    match task {
+        RpcTask::FtPair {
+            block_height,
+            account_id,
+            token_id,
+        } => {
+            let value = rpc_json_request(
+                json!({
+                    "request_type": "call_function",
+                    "account_id": token_id,
+                    "method_name": "ft_balance_of",
+                    "args_base64": BASE64_STANDARD.encode(format!("{{\"account_id\": \"{}\"}}", account_id)),
+                }),
+                client,
+                url,
+                block_height,
+                bearer_token,
+                timeout,
+            ).await?;
+            match value {
+                Some(value) => parse_ft_balance(value),
+                None => Ok(None),
+            }
+        }
+        RpcTask::AccountState {
+            block_height,
+            account_id,
+        } => {
+            let value = rpc_json_request(
+                json!({
+                    "request_type": "view_account",
+                    "account_id": account_id,
+                }),
+                client,
+                url,
+                block_height,
+                bearer_token,
+                timeout,
+            )
+            .await?;
+            match value {
+                Some(value) => parse_account_state(value),
+                None => Ok(None),
+            }
+        }
+    }
+}
+
+async fn rpc_json_request(
+    mut params: Value,
+    client: &Client,
+    url: &String,
+    block_height: &Option<BlockHeight>,
+    bearer_token: &Option<String>,
+    timeout: Duration,
+) -> Result<Option<Value>, RpcError> {
     if let Some(block_height) = block_height {
-        params["block_id"] = json!(block_height);
+        params["block_id"] = json!(*block_height);
     } else {
         params["finality"] = json!("final");
     }
@@ -207,16 +320,33 @@ async fn get_ft_balance(
     }
     let response = response.json(&request).timeout(timeout).send().await?;
     let response = response.json::<JsonResponse>().await?;
-    let balance = if let Some(res) = response.result {
-        let fc: FunctionCallResponse =
-            serde_json::from_value(res).map_err(|e| RpcError::InvalidFunctionCallResponse(e))?;
-        fc.result.and_then(|result| {
-            let balance: Option<String> = serde_json::from_slice(&result).ok();
-            let parsed_balance: Option<u128> = balance.and_then(|s| s.parse().ok());
-            parsed_balance.map(|b| b.to_string())
-        })
-    } else {
-        None
-    };
-    Ok(balance)
+    if let Some(error) = response.error {
+        if let Some(cause) = error.cause {
+            if cause.name == Some(RPC_ERROR_UNKNOWN_BLOCK.to_string()) {
+                return Err(RpcError::UnknownBlock);
+            }
+        }
+    }
+
+    Ok(response.result)
+}
+
+fn parse_account_state(result: Value) -> Result<Option<RpcTaskResult>, RpcError> {
+    let account_state: AccountStateResponse =
+        serde_json::from_value(result).map_err(|e| RpcError::InvalidAccountStateResponse(e))?;
+    Ok(Some(RpcTaskResult::AccountState(RpcAccountStateResult {
+        balance: account_state.amount,
+        locked: account_state.locked,
+        storage_bytes: account_state.storage_usage,
+    })))
+}
+
+fn parse_ft_balance(result: Value) -> Result<Option<RpcTaskResult>, RpcError> {
+    let fc: FunctionCallResponse =
+        serde_json::from_value(result).map_err(|e| RpcError::InvalidFunctionCallResponse(e))?;
+    Ok(fc.result.and_then(|result| {
+        let balance: Option<String> = serde_json::from_slice(&result).ok();
+        let parsed_balance = balance.and_then(|s| s.parse().ok());
+        parsed_balance.map(|b| RpcTaskResult::FtPair(RpcFtPairResult { balance: b }))
+    }))
 }
