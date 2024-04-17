@@ -61,7 +61,7 @@ struct FunctionCallResponse {
     // block_hash: String,
     // block_height: u64,
     result: Option<Vec<u8>>,
-    // error: Option<String>,
+    error: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -344,6 +344,9 @@ fn parse_account_state(result: Value) -> Result<Option<RpcTaskResult>, RpcError>
 fn parse_ft_balance(result: Value) -> Result<Option<RpcTaskResult>, RpcError> {
     let fc: FunctionCallResponse =
         serde_json::from_value(result).map_err(|e| RpcError::InvalidFunctionCallResponse(e))?;
+    if let Some(error) = fc.error {
+        tracing::debug!(target: TARGET_RPC, "FCR Error: {}", error);
+    }
     Ok(fc.result.and_then(|result| {
         let balance: Option<String> = serde_json::from_slice(&result).ok();
         let parsed_balance = balance.and_then(|s| s.parse().ok());
