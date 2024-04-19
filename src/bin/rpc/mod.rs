@@ -80,6 +80,7 @@ pub struct RpcConfig {
     pub concurrency: usize,
     pub bearer_token: Option<String>,
     pub timeout: Duration,
+    pub num_iterations: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -142,12 +143,16 @@ pub struct RpcResultPair {
 
 impl RpcConfig {
     pub fn from_env() -> Self {
+        let rpcs: Vec<_> = env::var("RPCS")
+            .expect("Missing env RPCS")
+            .split(",")
+            .map(|s| s.to_string())
+            .collect();
+        let num_iterations = env::var("RPC_NUM_ITERATIONS")
+            .map(|s| s.parse().unwrap())
+            .unwrap_or(rpcs.len());
         let config = RpcConfig {
-            rpcs: env::var("RPCS")
-                .expect("Missing env RPCS")
-                .split(",")
-                .map(|s| s.to_string())
-                .collect(),
+            rpcs,
             concurrency: env::var("RPC_CONCURRENCY")
                 .unwrap_or("100".to_string())
                 .parse()
@@ -156,6 +161,7 @@ impl RpcConfig {
             timeout: env::var("RPC_TIMEOUT")
                 .map(|s| Duration::from_millis(s.parse().unwrap()))
                 .unwrap_or(RPC_TIMEOUT),
+            num_iterations,
         };
         assert!(config.concurrency > 0);
         assert!(config.rpcs.len() > 0);
@@ -183,11 +189,12 @@ pub async fn fetch_from_rpc(
         let task = task.clone();
         let bearer_token = rpc_config.bearer_token.clone();
         let timeout = rpc_config.timeout;
+        let num_iterations = rpc_config.num_iterations;
 
         // Spawn a new asynchronous task for each request
         task::spawn(async move {
             let mut index = i;
-            let mut iterations = rpcs.len();
+            let mut iterations = num_iterations;
             let mut sleep = Duration::from_millis(100);
             let res = loop {
                 let url = &rpcs[index % rpcs.len()];
