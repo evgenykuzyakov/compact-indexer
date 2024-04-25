@@ -62,24 +62,19 @@ async fn main() {
         update_balances(&mut redis_db, ft_update, &config, true).await;
     }
 
-    let path = env::var("PENDING_UPDATE_FN").expect("PENDING_UPDATE_FN is not set");
-    if std::path::Path::new(&path).exists() {
-        let f = std::fs::File::open(path).expect("Failed to open pending update file");
-        let ft_update: BlockUpdate =
-            serde_json::from_reader(f).expect("Failed to read pending update");
-        update_balances(&mut redis_db, ft_update, &config, false).await;
-    }
-
     loop {
-        let response: redis::RedisResult<(String, String)> =
-            with_retries!(redis_db, |connection| async {
-                redis::cmd("BLPOP")
-                    .arg("ft_updates")
-                    .arg(0)
-                    .query_async(connection)
-                    .await
-            });
-        let (_key_name, s) = response.expect("Failed to get ft_updates");
+        let response: redis::RedisResult<(String,)> = with_retries!(redis_db, |connection| async {
+            redis::pipe()
+                .cmd("BLMOVE")
+                .arg("ft_updates")
+                .arg("ft_updates")
+                .arg("LEFT")
+                .arg("LEFT")
+                .arg(0)
+                .query_async(connection)
+                .await
+        });
+        let (s,) = response.expect("Failed to get ft_updates");
         let ft_updates: BlockUpdate = serde_json::from_str(&s).expect("Invalid JSON");
         update_balances(&mut redis_db, ft_updates, &config, false).await;
     }
@@ -91,12 +86,6 @@ async fn update_balances(
     config: &Config,
     backfill: bool,
 ) {
-    // Save pending update
-    if !backfill {
-        let path = env::var("PENDING_UPDATE_FN").expect("PENDING_UPDATE_FN is not set");
-        let f = std::fs::File::create(path).expect("Failed to create pending update file");
-        serde_json::to_writer(f, &block_update).expect("Failed to write pending update");
-    }
     let accounts = block_update.accounts.unwrap_or_default();
 
     let mut tasks = vec![];
@@ -132,6 +121,7 @@ async fn update_balances(
     // Save balances to redis
     let res: redis::RedisResult<()> = with_retries!(redis_db, |connection| async {
         let mut pipe = redis::pipe();
+        pipe.cmd("LPOP").arg("ft_updates").ignore();
         for RpcResultPair { task, result } in &results {
             match task {
                 RpcTask::FtPair {
@@ -251,8 +241,5 @@ async fn update_balances(
     if backfill {
         let path = env::var("BACKFILL_FILE").expect("BACKFILL_FILE is not set");
         std::fs::remove_file(path).expect("Failed to remove backfill file");
-    } else {
-        let path = env::var("PENDING_UPDATE_FN").expect("PENDING_UPDATE_FN is not set");
-        std::fs::remove_file(path).expect("Failed to remove pending update file");
     }
 }
