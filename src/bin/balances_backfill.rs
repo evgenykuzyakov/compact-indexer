@@ -5,7 +5,7 @@ mod rpc;
 use redis_db::RedisDB;
 use std::env;
 
-use crate::rpc::{get_ft_balances, PairBalanceUpdate};
+use crate::rpc::{fetch_from_rpc, RpcResultPair, RpcTask};
 use dotenv::dotenv;
 use tokio::sync::mpsc;
 
@@ -15,14 +15,15 @@ async fn start(blocks_sink: mpsc::Sender<Vec<String>>) {
     let export_fn = env::var("EXPORT_FN").expect("Missing env EXPORT_FN");
     let f = std::fs::File::open(export_fn).expect("Failed to open export file");
     let mut csv_reader = csv::ReaderBuilder::new()
+        .delimiter(b' ')
         .has_headers(false)
         .from_reader(std::io::BufReader::new(f));
 
     let mut pairs = Vec::new();
     for (i, result) in csv_reader.records().enumerate() {
         let record = result.expect("Failed to read record");
-        let token_id = record.get(0).expect("Missing token_id");
-        let account_id = record.get(1).expect("Missing account_id");
+        let token_id = record.get(1).expect("Missing token_id");
+        let account_id = record.get(0).expect("Missing account_id");
         pairs.push(format!("{}:{}", token_id, account_id));
         if pairs.len() == 1000 {
             let mut new_pairs = vec![];
@@ -75,24 +76,42 @@ async fn process_balances(
 }
 
 async fn update_balances(redis_db: &mut RedisDB, pairs: Vec<String>, rpc_config: &rpc::RpcConfig) {
+    let mut tasks = vec![];
+    // Pair tasks
+    tasks.extend(pairs.iter().map(|pair| {
+        let (token_id, account_id) = pair.split_once(':').unwrap();
+        let account_id = account_id.to_string();
+        RpcTask::FtPair {
+            block_height: None,
+            token_id: token_id.to_string(),
+            account_id: account_id.to_string(),
+        }
+    }));
     // Fetching balances
-    let balances = get_ft_balances(&pairs, None, rpc_config)
+    let results = fetch_from_rpc(&tasks, &rpc_config)
         .await
-        .expect("Failed to get balances");
+        .expect("Failed to fetch updates from the RPC");
 
     // Save balances to redis
     let res: redis::RedisResult<()> = with_retries!(redis_db, |connection| async {
         let mut pipe = redis::pipe();
-        for PairBalanceUpdate {
-            account_id,
-            token_id,
-            balance,
-        } in &balances
-        {
+        for RpcResultPair { task, result } in &results {
+            if result.is_none() {
+                continue;
+            }
+            let (token_id, account_id) = match task {
+                RpcTask::FtPair {
+                    token_id,
+                    account_id,
+                    ..
+                } => (token_id, account_id),
+                _ => unreachable!(),
+            };
+            let balance = result.as_ref().unwrap().unwrap_as_ft_pair().balance;
             pipe.cmd("HSETNX")
                 .arg(format!("b:{}", token_id))
                 .arg(account_id)
-                .arg(balance.as_ref().map(|s| s.as_str()).unwrap_or(""))
+                .arg(balance.to_string())
                 .ignore();
         }
 
