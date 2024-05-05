@@ -108,7 +108,7 @@ async fn update_balances(redis_db: &mut RedisDB, pairs: Vec<String>, rpc_config:
                 _ => unreachable!(),
             };
             let balance = result.as_ref().unwrap().unwrap_as_ft_pair().balance;
-            pipe.cmd("HSETNX")
+            pipe.cmd("HSET")
                 .arg(format!("b:{}", token_id))
                 .arg(account_id)
                 .arg(balance.to_string())
