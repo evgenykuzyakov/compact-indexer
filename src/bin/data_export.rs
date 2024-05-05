@@ -116,7 +116,7 @@ async fn main() {
     tracing::info!(target: PROJECT_ID, "Extracted {} token pairs", all_token_pairs.len());
     // Extracting token balances
     let mut all_balances = vec![];
-    let mut number_of_empty_balances = 0;
+    let mut empty_balances = vec![];
     for chunk in all_token_pairs.chunks(100000) {
         let res: redis::RedisResult<Vec<Option<String>>> =
             with_retries!(read_redis_db, |connection| async {
@@ -132,12 +132,22 @@ async fn main() {
         for (balance, pair) in balances.iter().zip(chunk) {
             if let Some(balance) = balance {
                 if balance.is_empty() {
-                    number_of_empty_balances += 1;
+                    empty_balances.push(pair.clone());
+                } else {
+                    all_balances.push((pair.clone(), balance.clone()));
                 }
-                all_balances.push((pair.clone(), balance.clone()));
             }
         }
     }
+    std::fs::write(
+        "res/empty_balances.txt",
+        empty_balances
+            .iter()
+            .map(|(a, b)| format!("{} {}", a, b))
+            .collect::<Vec<_>>()
+            .join("\n"),
+    )
+    .expect("Failed to write empty balances");
     std::fs::write(
         "res/balances.txt",
         all_balances
@@ -148,7 +158,7 @@ async fn main() {
     )
     .expect("Failed to write balances");
     tracing::info!(target: PROJECT_ID, "Extracted {} balances", all_balances.len());
-    tracing::info!(target: PROJECT_ID, "Number of empty balances: {}", number_of_empty_balances);
+    tracing::info!(target: PROJECT_ID, "Number of empty balances: {}", empty_balances.len());
     // Group token balances by account_id
     let mut accounts = HashMap::new();
     for (pair, balance) in all_balances {
