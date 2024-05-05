@@ -101,7 +101,7 @@ pub struct RpcFtPairResult {
     pub balance: u128,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RpcAccountStateResult {
     #[serde(with = "dec_format")]
     #[serde(rename = "b")]
