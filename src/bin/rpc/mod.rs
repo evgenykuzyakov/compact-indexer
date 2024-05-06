@@ -1,6 +1,6 @@
 use base64::prelude::*;
 use near_indexer::near_primitives::serialize::dec_format;
-use near_indexer::near_primitives::types::BlockHeight;
+use near_indexer::near_primitives::types::{AccountId, BlockHeight};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -94,6 +94,17 @@ pub enum RpcTask {
         block_height: Option<BlockHeight>,
         account_id: String,
     },
+    StakingPool {
+        block_height: Option<BlockHeight>,
+        account_id: String,
+        staking_pool_id: String,
+    },
+    Custom {
+        block_height: Option<BlockHeight>,
+        account_id: String,
+        method_name: String,
+        args: String,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -113,10 +124,23 @@ pub struct RpcAccountStateResult {
     pub storage_bytes: u64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RpcStakingPoolResult {
+    // Unnecessary field
+    // pub account_id: AccountId,
+    #[serde(with = "dec_format")]
+    pub unstaked_balance: u128,
+    #[serde(with = "dec_format")]
+    pub staked_balance: u128,
+    pub can_withdraw: bool,
+}
+
 #[derive(Debug, Clone)]
 pub enum RpcTaskResult {
     FtPair(RpcFtPairResult),
     AccountState(RpcAccountStateResult),
+    StakingPool(RpcStakingPoolResult),
+    Custom(Value),
 }
 
 impl RpcTaskResult {
@@ -131,6 +155,20 @@ impl RpcTaskResult {
         match &self {
             RpcTaskResult::AccountState(r) => r,
             _ => panic!("Not AccountState"),
+        }
+    }
+
+    pub fn unwrap_as_staking_pool(&self) -> &RpcStakingPoolResult {
+        match &self {
+            RpcTaskResult::StakingPool(r) => r,
+            _ => panic!("Not StakingPool"),
+        }
+    }
+
+    pub fn unwrap_as_custom(&self) -> &Value {
+        match &self {
+            RpcTaskResult::Custom(r) => r,
+            _ => panic!("Not Custom"),
         }
     }
 }
@@ -299,6 +337,54 @@ async fn execute_task(
                 None => Ok(None),
             }
         }
+        RpcTask::StakingPool {
+            block_height,
+            account_id,
+            staking_pool_id,
+        } => {
+            let value = rpc_json_request(
+                json!({
+                    "request_type": "call_function",
+                    "account_id": staking_pool_id,
+                    "method_name": "get_account",
+                    "args_base64": BASE64_STANDARD.encode(format!("{{\"account_id\": \"{}\"}}", account_id)),
+                }),
+                client,
+                url,
+                block_height,
+                bearer_token,
+                timeout,
+            ).await?;
+            match value {
+                Some(value) => parse_staking_pool(value),
+                None => Ok(None),
+            }
+        }
+        RpcTask::Custom {
+            block_height,
+            account_id,
+            method_name,
+            args,
+        } => {
+            let value = rpc_json_request(
+                json!({
+                    "request_type": "call_function",
+                    "account_id": account_id,
+                    "method_name": method_name,
+                    "args_base64": BASE64_STANDARD.encode(args),
+                }),
+                client,
+                url,
+                block_height,
+                bearer_token,
+                timeout,
+            )
+            .await?;
+            match value {
+                Some(value) => parse_custom(value),
+                None => Ok(None),
+            }
+        }
     }
 }
 
@@ -358,5 +444,29 @@ fn parse_ft_balance(result: Value) -> Result<Option<RpcTaskResult>, RpcError> {
         let balance: Option<String> = serde_json::from_slice(&result).ok();
         let parsed_balance = balance.and_then(|s| s.parse().ok());
         parsed_balance.map(|b| RpcTaskResult::FtPair(RpcFtPairResult { balance: b }))
+    }))
+}
+
+fn parse_staking_pool(result: Value) -> Result<Option<RpcTaskResult>, RpcError> {
+    let fc: FunctionCallResponse =
+        serde_json::from_value(result).map_err(|e| RpcError::InvalidFunctionCallResponse(e))?;
+    if let Some(error) = fc.error {
+        tracing::debug!(target: TARGET_RPC, "FCR Error: {}", error);
+    }
+    Ok(fc.result.and_then(|result| {
+        let staking_pool: Option<RpcStakingPoolResult> = serde_json::from_slice(&result).ok();
+        staking_pool.map(|s| RpcTaskResult::StakingPool(s))
+    }))
+}
+
+fn parse_custom(result: Value) -> Result<Option<RpcTaskResult>, RpcError> {
+    let fc: FunctionCallResponse =
+        serde_json::from_value(result).map_err(|e| RpcError::InvalidFunctionCallResponse(e))?;
+    if let Some(error) = fc.error {
+        tracing::debug!(target: TARGET_RPC, "FCR Error: {}", error);
+    }
+    Ok(fc.result.and_then(|result| {
+        let v: Option<Value> = serde_json::from_slice(&result).ok();
+        v.map(|v| RpcTaskResult::Custom(v))
     }))
 }

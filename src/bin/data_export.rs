@@ -9,15 +9,15 @@ use std::collections::{HashMap, HashSet};
 use std::env;
 use std::str::FromStr;
 
-use crate::rpc::RpcAccountStateResult;
 use crate::rpc::RpcTask::AccountState;
+use crate::rpc::{RpcAccountStateResult, RpcResultPair, RpcStakingPoolResult, RpcTask};
 use dotenv::dotenv;
 use itertools::Itertools;
 use near_crypto::PublicKey;
 use near_indexer::near_primitives::serialize::dec_format;
 use near_indexer::near_primitives::types::{AccountId, BlockHeight};
 use serde::{Deserialize, Serialize};
-use serde_json::json;
+use serde_json::{json, Value};
 
 const PROJECT_ID: &str = "data_export";
 
@@ -27,8 +27,8 @@ pub struct Account {
     pub tokens: Vec<(String, String)>,
     #[serde(with = "dec_format")]
     pub near_balance: u128,
-    pub staking_pools: Vec<(String, String)>,
-    pub burrow_balances: Vec<(String, String)>,
+    pub staking_pools: Vec<(String, RpcStakingPoolResult)>,
+    pub burrow: Option<Value>,
 }
 
 impl Account {
@@ -38,7 +38,7 @@ impl Account {
             tokens: vec![],
             near_balance: 0,
             staking_pools: vec![],
-            burrow_balances: vec![],
+            burrow: None,
         }
     }
 }
@@ -48,7 +48,7 @@ async fn main() {
     openssl_probe::init_ssl_cert_env_vars();
     dotenv().ok();
 
-    common::setup_tracing("data_export=info,redis=info");
+    common::setup_tracing("data_export=info,redis=info,rpc=debug");
 
     tracing::log::info!(target: PROJECT_ID, "Starting Data Export");
 
@@ -235,7 +235,115 @@ async fn main() {
     )
     .expect("Failed to write staking pools");
     tracing::info!(target: PROJECT_ID, "Extracted {} staking pools", all_staking_pools.len());
-
-    // Extract all burrow accounts, match accounts with burrow accounts
+    let rpc_config = rpc::RpcConfig::from_env();
+    // Fetch balances from the RPCs
+    for chunk in all_staking_pools.chunks(1000) {
+        let tasks = chunk
+            .iter()
+            .map(|(account_id, staking_pool_id)| RpcTask::StakingPool {
+                block_height: None,
+                account_id: account_id.clone(),
+                staking_pool_id: staking_pool_id.clone(),
+            })
+            .collect::<Vec<_>>();
+        let results = rpc::fetch_from_rpc(&tasks, &rpc_config)
+            .await
+            .expect("Failed to fetch staking pools");
+        for RpcResultPair { task, result } in results {
+            if let Some(result) = result {
+                let (account_id, staking_pool_id) = match task {
+                    RpcTask::StakingPool {
+                        account_id,
+                        staking_pool_id,
+                        ..
+                    } => (account_id, staking_pool_id),
+                    _ => unreachable!(),
+                };
+                let result = result.unwrap_as_staking_pool().clone();
+                if result.staked_balance + result.unstaked_balance > 0 {
+                    accounts
+                        .entry(account_id.clone())
+                        .or_insert_with(|| Account::new(account_id.clone()))
+                        .staking_pools
+                        .push((staking_pool_id.clone(), result));
+                }
+            }
+        }
+    }
+    tracing::info!(target: PROJECT_ID, "Fetched staking pools balances");
+    std::fs::write(
+        "res/accounts.json",
+        serde_json::to_string(&accounts).expect("Failed to serialize accounts"),
+    )
+    .expect("Failed to write accounts");
+    // Fetching all burrow accounts
+    let burrow_account_id = "contract.main.burrow.near";
+    let num_accounts_results = rpc::fetch_from_rpc(
+        &[RpcTask::Custom {
+            block_height: None,
+            account_id: burrow_account_id.to_string(),
+            method_name: "get_num_accounts".to_string(),
+            args: "{}".to_string(),
+        }],
+        &rpc_config,
+    )
+    .await
+    .expect("Failed to fetch num burrow accounts");
+    let num_burrow_accounts = num_accounts_results
+        .get(0)
+        .expect("Failed to get num burrow accounts")
+        .result
+        .as_ref()
+        .expect("Failed to get num burrow accounts result")
+        .unwrap_as_custom()
+        .as_u64()
+        .expect("Failed to get num burrow accounts result as u64");
+    tracing::info!(target: PROJECT_ID, "Fetching {} burrow accounts", num_burrow_accounts);
+    let limit = 40;
+    let tasks = (0..num_burrow_accounts)
+        .step_by(limit)
+        .map(|offset| RpcTask::Custom {
+            block_height: None,
+            account_id: burrow_account_id.to_string(),
+            method_name: "get_accounts_paged".to_string(),
+            args: json!({ "from_index": offset, "limit": limit }).to_string(),
+        })
+        .collect::<Vec<_>>();
+    let results = rpc::fetch_from_rpc(&tasks, &rpc_config)
+        .await
+        .expect("Failed to fetch burrow accounts");
+    let mut burrow_accounts = vec![];
+    for RpcResultPair { result, .. } in results {
+        let accounts = result
+            .expect("Failed to get burrow accounts")
+            .unwrap_as_custom()
+            .as_array()
+            .expect("Failed to get burrow accounts as vec")
+            .clone();
+        burrow_accounts.extend(accounts);
+    }
+    tracing::info!(target: PROJECT_ID, "Fetched {} burrow accounts", burrow_accounts.len());
+    std::fs::write(
+        "res/burrow_accounts.json",
+        serde_json::to_string(&burrow_accounts).expect("Failed to serialize burrow accounts"),
+    )
+    .expect("Failed to write burrow accounts");
+    let mut num_matched_burrow_accounts = 0;
+    for burrow_account in burrow_accounts {
+        let account_id = burrow_account["account_id"]
+            .as_str()
+            .expect("Failed to get account_id")
+            .to_string();
+        if let Some(account) = accounts.get_mut(&account_id) {
+            num_matched_burrow_accounts += 1;
+            account.burrow = Some(burrow_account.clone());
+        }
+    }
+    tracing::info!(target: PROJECT_ID, "Matched {} burrow accounts", num_matched_burrow_accounts);
+    std::fs::write(
+        "res/accounts.json",
+        serde_json::to_string(&accounts).expect("Failed to serialize accounts"),
+    )
+    .expect("Failed to write accounts");
     // Extract NFTs
 }
