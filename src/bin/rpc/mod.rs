@@ -12,13 +12,14 @@ use tokio::task;
 const RPC_TIMEOUT: Duration = Duration::from_millis(5000);
 const TARGET_RPC: &str = "rpc";
 const RPC_ERROR_UNKNOWN_BLOCK: &str = "UNKNOWN_BLOCK";
+const RPC_ERROR_UNAVAILABLE_SHARD: &str = "UNAVAILABLE_SHARD";
 
 #[derive(Debug)]
 pub enum RpcError {
     ReqwestError(reqwest::Error),
     InvalidFunctionCallResponse(serde_json::Error),
     InvalidAccountStateResponse(serde_json::Error),
-    UnknownBlock,
+    RetriableRpcError(String),
 }
 
 impl From<reqwest::Error> for RpcError {
@@ -244,7 +245,9 @@ pub async fn fetch_from_rpc(
                         break Ok(RpcResultPair { task, result });
                     }
                     Err(e) => {
-                        tracing::warn!(target: TARGET_RPC, "RPC Error: {:?}", e);
+                        if !matches!(e, RpcError::RetriableRpcError(_)) {
+                            tracing::warn!(target: TARGET_RPC, "RPC Error: {:?}", e);
+                        }
                         // Need to retry this task
                         iterations -= 1;
                         if iterations == 0 {
@@ -415,8 +418,10 @@ async fn rpc_json_request(
     let response = response.json::<JsonResponse>().await?;
     if let Some(error) = response.error {
         if let Some(cause) = &error.cause {
-            if cause.name == Some(RPC_ERROR_UNKNOWN_BLOCK.to_string()) {
-                return Err(RpcError::UnknownBlock);
+            if cause.name == Some(RPC_ERROR_UNKNOWN_BLOCK.to_string())
+                || cause.name == Some(RPC_ERROR_UNAVAILABLE_SHARD.to_string())
+            {
+                return Err(RpcError::RetriableRpcError(cause.name.clone().unwrap()));
             }
         }
         tracing::debug!(target: TARGET_RPC, "RPC Error: {:?}", error);
