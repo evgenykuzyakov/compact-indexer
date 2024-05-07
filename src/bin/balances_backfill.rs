@@ -8,7 +8,9 @@ use std::env;
 
 use crate::rpc::{fetch_from_rpc, RpcResultPair, RpcTask};
 use dotenv::dotenv;
+use itertools::Itertools;
 use tokio::sync::mpsc;
+use tracing_subscriber::fmt::format;
 
 const PROJECT_ID: &str = "balances_backfill";
 
@@ -49,16 +51,16 @@ async fn redis_start(pairs_sync: mpsc::Sender<Vec<String>>) {
     ))
     .await;
 
-    let mut tokens = HashSet::new();
+    let mut accounts = HashSet::new();
     let mut cursor = "0".to_string();
-    let mut total_tokens = 0;
+    let mut total_accounts = 0;
     let mut last_multiplier = 0;
     loop {
         let res = with_retries!(read_redis_db, |connection| async {
             let res: redis::RedisResult<(String, Vec<String>)> = redis::cmd("SCAN")
                 .arg(&cursor)
                 .arg("MATCH")
-                .arg("b:*")
+                .arg("ft:*")
                 .arg("COUNT")
                 .arg(100000)
                 .query_async(connection)
@@ -68,37 +70,59 @@ async fn redis_start(pairs_sync: mpsc::Sender<Vec<String>>) {
         .expect("Failed to scan keys");
         let (next_cursor, keys) = res;
         cursor = next_cursor;
-        total_tokens += keys.len();
-        tokens.extend(keys);
-        let mult = tokens.len() / 100000;
+        total_accounts += keys.len();
+        accounts.extend(keys);
+        let mult = accounts.len() / 100000;
         if mult > last_multiplier {
             last_multiplier = mult;
-            tracing::info!(target: PROJECT_ID, "Scanned {} tokens", total_tokens);
+            tracing::info!(target: PROJECT_ID, "Scanned {} accounts", total_accounts);
         }
         if cursor == "0" {
             break;
         }
     }
-    tracing::info!(target: PROJECT_ID, "Total tokens: {}", total_tokens);
+    tracing::info!(target: PROJECT_ID, "Total accounts: {}", total_accounts);
 
     let mut total_pairs = 0;
-    let mut pairs = vec![];
-    for (i, token_key) in tokens.into_iter().enumerate() {
-        if i % 100 == 0 {
-            tracing::info!(target: PROJECT_ID, "Exported {} tokens out of {}. Total pairs: {}", i, total_tokens, total_pairs);
+    let mut all_pairs = vec![];
+    for (i, account_key) in accounts.into_iter().enumerate() {
+        if i % 10000 == 0 {
+            tracing::info!(target: PROJECT_ID, "Exported {} tokens out of {}. Total pairs: {}", i, total_accounts, total_pairs);
         }
         let res = with_retries!(read_redis_db, |connection| async {
             let res: redis::RedisResult<Vec<(String, String)>> = redis::cmd("HGETALL")
-                .arg(&token_key)
+                .arg(&account_key)
                 .query_async(connection)
                 .await;
             res
         })
-        .expect("Failed to get balances for token");
-        let token_id = token_key.split(':').last().unwrap();
+        .expect("Failed to get tokens for account");
+        let account_id = account_key.split(':').last().unwrap();
         total_pairs += res.len();
-        for (account_id, balance) in res {
-            if balance == "" {
+        for (token_id, _) in res {
+            all_pairs.push((token_id, account_id.to_string()));
+        }
+    }
+
+    tracing::info!(target: PROJECT_ID, "Total pairs: {}", total_pairs);
+
+    total_pairs = 0;
+    let mut pairs = vec![];
+    for chunk in all_pairs.chunks(10000) {
+        let res: redis::RedisResult<Vec<Option<String>>> =
+            with_retries!(read_redis_db, |connection| async {
+                let mut pipe = redis::pipe();
+                for (token_id, account_id) in chunk {
+                    pipe.cmd("HGET")
+                        .arg(format!("b:{}", token_id))
+                        .arg(account_id);
+                }
+                pipe.query_async(connection).await
+            });
+        let res = res.expect("Failed to get balances for token");
+        total_pairs += res.len();
+        for (balance, (token_id, account_id)) in res.into_iter().zip(chunk) {
+            if balance.is_none() || balance == Some("".to_string()) {
                 pairs.push(format!("{}:{}", token_id, account_id));
                 if pairs.len() == 1000 {
                     let mut new_pairs = vec![];
