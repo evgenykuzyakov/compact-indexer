@@ -43,17 +43,17 @@ struct JsonResponse {
     error: Option<JsonRpcError>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Debug)]
 struct JsonRpcErrorCause {
     // info: Option<Value>,
     name: Option<String>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Debug)]
 struct JsonRpcError {
     cause: Option<JsonRpcErrorCause>,
-    // code: i64,
-    // data: Option<String>,
+    code: i64,
+    data: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -414,11 +414,12 @@ async fn rpc_json_request(
     let response = response.json(&request).timeout(timeout).send().await?;
     let response = response.json::<JsonResponse>().await?;
     if let Some(error) = response.error {
-        if let Some(cause) = error.cause {
+        if let Some(cause) = &error.cause {
             if cause.name == Some(RPC_ERROR_UNKNOWN_BLOCK.to_string()) {
                 return Err(RpcError::UnknownBlock);
             }
         }
+        tracing::debug!(target: TARGET_RPC, "RPC Error: {:?}", error);
     }
 
     Ok(response.result)
