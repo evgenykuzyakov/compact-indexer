@@ -3,6 +3,7 @@ mod redis_db;
 mod rpc;
 
 use redis_db::RedisDB;
+use std::collections::HashSet;
 use std::env;
 
 use crate::rpc::{fetch_from_rpc, RpcResultPair, RpcTask};
@@ -11,7 +12,7 @@ use tokio::sync::mpsc;
 
 const PROJECT_ID: &str = "balances_backfill";
 
-async fn start(blocks_sink: mpsc::Sender<Vec<String>>) {
+async fn export_fn_start(pairs_sync: mpsc::Sender<Vec<String>>) {
     let export_fn = env::var("EXPORT_FN").expect("Missing env EXPORT_FN");
     let f = std::fs::File::open(export_fn).expect("Failed to open export file");
     let mut csv_reader = csv::ReaderBuilder::new()
@@ -28,7 +29,7 @@ async fn start(blocks_sink: mpsc::Sender<Vec<String>>) {
         if pairs.len() == 1000 {
             let mut new_pairs = vec![];
             std::mem::swap(&mut new_pairs, &mut pairs);
-            blocks_sink.send(new_pairs).await.expect("Failed to send");
+            pairs_sync.send(new_pairs).await.expect("Failed to send");
         }
         if i % 100000 == 0 {
             tracing::info!(target: PROJECT_ID, "Read {} records", i);
@@ -36,9 +37,86 @@ async fn start(blocks_sink: mpsc::Sender<Vec<String>>) {
     }
 }
 
-pub fn streamer() -> mpsc::Receiver<Vec<String>> {
+pub fn export_fn_streamer() -> mpsc::Receiver<Vec<String>> {
     let (sender, receiver) = mpsc::channel(100);
-    tokio::spawn(start(sender));
+    tokio::spawn(export_fn_start(sender));
+    receiver
+}
+
+async fn redis_start(pairs_sync: mpsc::Sender<Vec<String>>) {
+    let mut read_redis_db = RedisDB::new(Some(
+        env::var("EXPORT_READ_REDIS_URL").expect("Missing env EXPORT_READ_REDIS_URL"),
+    ))
+    .await;
+
+    let mut tokens = HashSet::new();
+    let mut cursor = "0".to_string();
+    let mut total_tokens = 0;
+    let mut last_multiplier = 0;
+    loop {
+        let res = with_retries!(read_redis_db, |connection| async {
+            let res: redis::RedisResult<(String, Vec<String>)> = redis::cmd("SCAN")
+                .arg(&cursor)
+                .arg("MATCH")
+                .arg("b:*")
+                .arg("COUNT")
+                .arg(100000)
+                .query_async(connection)
+                .await;
+            res
+        })
+        .expect("Failed to scan keys");
+        let (next_cursor, keys) = res;
+        cursor = next_cursor;
+        total_tokens += keys.len();
+        tokens.extend(keys);
+        let mult = tokens.len() / 100000;
+        if mult > last_multiplier {
+            last_multiplier = mult;
+            tracing::info!(target: PROJECT_ID, "Scanned {} tokens", total_tokens);
+        }
+        if cursor == "0" {
+            break;
+        }
+    }
+    tracing::info!(target: PROJECT_ID, "Total tokens: {}", total_tokens);
+
+    let mut total_pairs = 0;
+    let mut pairs = vec![];
+    for (i, token_key) in tokens.into_iter().enumerate() {
+        if i % 100 == 0 {
+            tracing::info!(target: PROJECT_ID, "Exported {} tokens out of {}. Total pairs: {}", i, total_tokens, total_pairs);
+        }
+        let res = with_retries!(read_redis_db, |connection| async {
+            let res: redis::RedisResult<Vec<(String, String)>> = redis::cmd("HGETALL")
+                .arg(&token_key)
+                .query_async(connection)
+                .await;
+            res
+        })
+        .expect("Failed to get balances for token");
+        let token_id = token_key.split(':').last().unwrap();
+        total_pairs += res.len();
+        for (account_id, balance) in res {
+            if balance == "" {
+                pairs.push(format!("{}:{}", token_id, account_id));
+                if pairs.len() == 1000 {
+                    let mut new_pairs = vec![];
+                    std::mem::swap(&mut new_pairs, &mut pairs);
+                    pairs_sync.send(new_pairs).await.expect("Failed to send");
+                }
+            }
+        }
+    }
+    if !pairs.is_empty() {
+        pairs_sync.send(pairs).await.expect("Failed to send");
+    }
+    tracing::info!(target: PROJECT_ID, "Total pairs: {}", total_pairs);
+}
+
+pub fn redis_streamer() -> mpsc::Receiver<Vec<String>> {
+    let (sender, receiver) = mpsc::channel(100);
+    tokio::spawn(redis_start(sender));
     receiver
 }
 
@@ -53,12 +131,23 @@ async fn main() {
 
     let rpc_config = rpc::RpcConfig::from_env();
 
+    let args: Vec<String> = std::env::args().collect();
+    let command = args
+        .get(1)
+        .map(|arg| arg.as_str())
+        .expect("Command argument missing");
+
+    let stream = match command {
+        "export" => export_fn_streamer(),
+        "empty_ft" => redis_streamer(),
+        _ => panic!("Invalid command"),
+    };
+
     let redis_db = RedisDB::new(Some(
         env::var("WRITE_REDIS_URL").expect("Missing env WRITE_REDIS_URL"),
     ))
     .await;
 
-    let stream = streamer();
     process_balances(stream, redis_db, &rpc_config).await;
 }
 
@@ -97,6 +186,7 @@ async fn update_balances(redis_db: &mut RedisDB, pairs: Vec<String>, rpc_config:
         let mut pipe = redis::pipe();
         for RpcResultPair { task, result } in &results {
             if result.is_none() {
+                tracing::info!(target: PROJECT_ID, "No result for task {:?}", task);
                 continue;
             }
             let (token_id, account_id) = match task {
