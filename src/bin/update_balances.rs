@@ -118,6 +118,19 @@ async fn update_balances(
 
     let limit_arg = -(config.max_top_holders_count as i64 + 1);
 
+    let mut real_tokens = HashSet::new();
+    for RpcResultPair { task, result } in &results {
+        match task {
+            RpcTask::FtPair { token_id, .. } => {
+                let balance = result.as_ref().map(|r| r.unwrap_as_ft_pair().balance);
+                if balance.is_some() {
+                    real_tokens.insert(token_id);
+                }
+            }
+            _ => {}
+        }
+    }
+
     // Save balances to redis
     let res: redis::RedisResult<()> = with_retries!(redis_db, |connection| async {
         let mut pipe = redis::pipe();
@@ -130,6 +143,11 @@ async fn update_balances(
                     ..
                 } => {
                     let balance = result.as_ref().map(|r| r.unwrap_as_ft_pair().balance);
+                    if balance.is_none() {
+                        if real_tokens.contains(token_id) {
+                            tracing::info!(target: PROJECT_ID, "No balance for token {} account {}", token_id, account_id);
+                        }
+                    }
                     pipe.cmd(if backfill { "HSETNX" } else { "HSET" })
                         .arg(format!("b:{}", token_id))
                         .arg(account_id)
@@ -190,6 +208,7 @@ async fn update_balances(
                             .ignore();
                     }
                 }
+                _ => unreachable!(),
             };
         }
 

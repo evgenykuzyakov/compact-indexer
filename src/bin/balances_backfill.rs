@@ -159,6 +159,7 @@ async fn process_balances(
     let mut total_pairs = 0;
     while let Some(pairs) = stream.recv().await {
         total_pairs += pairs.len();
+        tracing::info!(target: PROJECT_ID, "Pair example: {:?}", pairs[0]);
         update_balances(&mut redis_db, pairs, rpc_config).await;
         tracing::info!(target: PROJECT_ID, "Processed {} pairs", total_pairs);
     }
