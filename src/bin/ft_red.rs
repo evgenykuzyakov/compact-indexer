@@ -58,7 +58,7 @@ async fn main() {
     })
     .expect("Error setting Ctrl+C handler");
 
-    common::setup_tracing("ft_red=info,redis=info,clickhouse=info");
+    common::setup_tracing("ft_red=info,redis=info,clickhouse=info,neardata-fetcher=info");
 
     tracing::log::info!(target: PROJECT_ID, "Starting FT Redis Indexer");
 
