@@ -1,7 +1,7 @@
 mod utils;
 
 use clickhouse::{Client, Row};
-use near_indexer::near_primitives::views::{
+use fastnear_primitives::near_primitives::views::{
     AccessKeyPermissionView, ActionView, ExecutionOutcomeView, ExecutionStatusView,
     ReceiptEnumView, ReceiptView,
 };
@@ -12,7 +12,8 @@ use utils::*;
 
 use serde::Serialize;
 
-use near_indexer::near_primitives::types::BlockHeight;
+use fastnear_primitives::block_with_tx_hash::BlockWithTxHashes;
+use fastnear_primitives::near_primitives::types::BlockHeight;
 use std::convert::TryFrom;
 use std::time::Duration;
 use tokio_retry::{strategy::ExponentialBackoff, Retry};
@@ -164,10 +165,7 @@ fn establish_connection() -> Client {
         .with_database(env::var("DATABASE_DATABASE").unwrap())
 }
 
-pub async fn extract_info(
-    db: &mut ClickDB,
-    msg: near_indexer::StreamerMessage,
-) -> anyhow::Result<()> {
+pub async fn extract_info(db: &mut ClickDB, msg: BlockWithTxHashes) -> anyhow::Result<()> {
     let block_height = msg.block.header.height;
     let (actions, events) = extract_rows(msg);
     db.actions.extend(actions);

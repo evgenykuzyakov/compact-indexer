@@ -1,7 +1,8 @@
 use crate::click::{ActionKind, ActionRow, EventRow, ReceiptStatus, EVENT_LOG_PREFIX};
-use near_indexer::near_primitives::hash::CryptoHash;
-use near_indexer::near_primitives::types::AccountId;
-use near_indexer::near_primitives::views::{
+use fastnear_primitives::block_with_tx_hash::BlockWithTxHashes;
+use fastnear_primitives::near_primitives::hash::CryptoHash;
+use fastnear_primitives::near_primitives::types::AccountId;
+use fastnear_primitives::near_primitives::views::{
     AccessKeyPermissionView, ActionView, ExecutionOutcomeView, ExecutionStatusView,
     ReceiptEnumView, ReceiptView,
 };
@@ -109,7 +110,7 @@ pub fn parse_event(event: &str) -> Option<Event> {
     Some(event)
 }
 
-pub fn extract_rows(msg: near_indexer::StreamerMessage) -> (Vec<ActionRow>, Vec<EventRow>) {
+pub fn extract_rows(msg: BlockWithTxHashes) -> (Vec<ActionRow>, Vec<EventRow>) {
     let mut action_rows = vec![];
     let mut event_rows = vec![];
 

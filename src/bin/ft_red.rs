@@ -2,17 +2,21 @@ mod click;
 mod common;
 mod redis_db;
 
+use crate::click::{extract_rows, ActionKind, ActionRow, EventRow, ReceiptStatus};
+use dotenv::dotenv;
+use fastnear_neardata_fetcher::fetcher;
+use fastnear_primitives::block_with_tx_hash::BlockWithTxHashes;
+use fastnear_primitives::near_primitives::account::id::AccountType;
+use fastnear_primitives::near_primitives::types::{AccountId, BlockHeight};
+use fastnear_primitives::types::ChainId;
+use near_crypto::PublicKey;
 use redis_db::RedisDB;
+use serde_json::json;
 use std::collections::{HashMap, HashSet};
 use std::env;
 use std::str::FromStr;
-
-use crate::click::{extract_rows, ActionKind, ActionRow, EventRow, ReceiptStatus};
-use dotenv::dotenv;
-use near_crypto::PublicKey;
-use near_indexer::near_primitives::types::{AccountId, BlockHeight};
-use near_indexer::StreamerMessage;
-use serde_json::json;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use tokio::sync::mpsc;
 
 const PROJECT_ID: &str = "ft_red";
@@ -40,128 +44,66 @@ pub enum PublicKeyUpdateType {
     RemovedKey,
 }
 
-async fn start(
-    mut last_id: String,
-    mut redis_db: RedisDB,
-    blocks_sink: mpsc::Sender<StreamerMessage>,
-) {
-    loop {
-        let res = redis_db.xread(1, FINAL_BLOCKS_KEY, &last_id).await;
-        let res = match res {
-            Ok(res) => res,
-            Err(err) => {
-                tracing::log::error!(target: PROJECT_ID, "Error: {}", err);
-                tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
-                let _ = redis_db.reconnect().await;
-                continue;
-            }
-        };
-        let (id, key_values) = res.into_iter().next().unwrap();
-        assert_eq!(key_values.len(), 1, "Expected 1 key-value pair");
-        let (key, value) = key_values.into_iter().next().unwrap();
-        assert_eq!(key, BLOCK_KEY, "Expected key to be block");
-        let streamer_message: StreamerMessage = serde_json::from_str(&value).unwrap();
-        blocks_sink.send(streamer_message).await.unwrap();
-        last_id = id;
-    }
-}
-
-pub fn streamer(last_id: String, redis_db: RedisDB) -> mpsc::Receiver<StreamerMessage> {
-    let (sender, receiver) = mpsc::channel(100);
-    tokio::spawn(start(last_id, redis_db, sender));
-    receiver
-}
-
 #[tokio::main]
 async fn main() {
     openssl_probe::init_ssl_cert_env_vars();
     dotenv().ok();
 
+    let is_running = Arc::new(AtomicBool::new(true));
+    let ctrl_c_running = is_running.clone();
+
+    ctrlc::set_handler(move || {
+        ctrl_c_running.store(false, Ordering::SeqCst);
+        println!("Received Ctrl+C, starting shutdown...");
+    })
+    .expect("Error setting Ctrl+C handler");
+
     common::setup_tracing("ft_red=info,redis=info,clickhouse=info");
 
     tracing::log::info!(target: PROJECT_ID, "Starting FT Redis Indexer");
 
-    let args: Vec<String> = std::env::args().collect();
-    let command = args.get(1).map(|arg| arg.as_str()).unwrap_or("");
-
-    let mut read_redis_db = RedisDB::new(None).await;
     let mut write_redis_db = RedisDB::new(Some(
         env::var("WRITE_REDIS_URL").expect("Missing env WRITE_REDIS_URL"),
     ))
     .await;
 
-    let (id, _key_values) = read_redis_db
-        .xread(1, FINAL_BLOCKS_KEY, "0")
+    let client = reqwest::Client::new();
+    let chain_id = ChainId::try_from(std::env::var("CHAIN_ID").expect("CHAIN_ID is not set"))
+        .expect("Invalid chain id");
+    let first_block_height = fetcher::fetch_first_block(&client, chain_id)
         .await
-        .expect("Failed to get the first block from Redis")
-        .into_iter()
-        .next()
-        .unwrap();
-    let first_block_height: BlockHeight = id.split_once("-").unwrap().0.parse().unwrap();
+        .expect("First block doesn't exists")
+        .block
+        .header
+        .height;
     tracing::log::info!(target: PROJECT_ID, "First redis block {}", first_block_height);
-
-    if command == "backfill" {
-        let block_height: BlockHeight = env::args()
-            .nth(2)
-            .expect("Missing block height")
-            .parse()
-            .expect("Invalid block height");
-        tracing::log::info!(target: PROJECT_ID, "Backfilling block {}", block_height);
-
-        if first_block_height > block_height {
-            panic!("Too late to backfill");
-        }
-
-        let id = format!("{}-0", block_height - 1);
-        let res = read_redis_db
-            .xread(1, FINAL_BLOCKS_KEY, &id)
-            .await
-            .expect("Failed to get the block");
-        let (_, key_values) = res.into_iter().next().unwrap();
-        assert_eq!(key_values.len(), 1, "Expected 1 key-value pair");
-        let (key, value) = key_values.into_iter().next().unwrap();
-        assert_eq!(key, BLOCK_KEY, "Expected key to be block");
-        let streamer_message: StreamerMessage = serde_json::from_str(&value).unwrap();
-
-        let block_height = streamer_message.block.header.height;
-        tracing::log::info!(target: PROJECT_ID, "Processing block: {}", block_height);
-        let (actions, events) = extract_rows(streamer_message);
-
-        let ft_pairs = extract_ft_pairs(&actions, &events);
-
-        {
-            let path = env::var("BACKFILL_FILE").expect("BACKFILL_FILE is not set");
-            let f = std::fs::File::create(path).expect("Failed to create backfill file");
-            serde_json::to_writer(f, &json!({
-                "block_height": block_height,
-                "pairs": ft_pairs.iter().map(|pair| format!("{}:{}", pair.token_id, pair.account_id)).collect::<Vec<_>>()
-            })).expect("Failed to write backfill file");
-        }
-        return;
-    }
-    if command != "run" {
-        panic!("Invalid command");
-    }
 
     let last_block_height: BlockHeight = write_redis_db
         .get("meta:latest_block")
         .await
         .expect("Failed to get the latest block")
         .map(|s| s.parse().unwrap())
-        .unwrap_or(first_block_height + SAFE_OFFSET);
+        .expect("Failed to parse the latest block");
 
-    if first_block_height + SAFE_OFFSET > last_block_height {
-        panic!("The first block in the redis is too close to the last block");
-    }
-
-    let last_id = format!("{}-0", last_block_height);
     tracing::log::info!(target: PROJECT_ID, "Resuming from {}", last_block_height);
 
-    let stream = streamer(last_id, read_redis_db);
-    listen_blocks(stream, write_redis_db).await;
+    let (sender, receiver) = mpsc::channel(100);
+    let config = fetcher::FetcherConfig {
+        num_threads: 4,
+        start_block_height: last_block_height + 1,
+        chain_id,
+    };
+    tokio::spawn(fetcher::start_fetcher(
+        Some(client),
+        config,
+        sender,
+        is_running,
+    ));
+
+    listen_blocks(receiver, write_redis_db).await;
 }
 
-async fn listen_blocks(mut stream: mpsc::Receiver<StreamerMessage>, mut redis_db: RedisDB) {
+async fn listen_blocks(mut stream: mpsc::Receiver<BlockWithTxHashes>, mut redis_db: RedisDB) {
     while let Some(streamer_message) = stream.recv().await {
         let block_height = streamer_message.block.header.height;
         tracing::log::info!(target: PROJECT_ID, "Processing block: {}", block_height);
@@ -302,7 +244,7 @@ fn extract_public_keys(actions: &[ActionRow]) -> HashMap<PublicKeyPair, PublicKe
                 }
                 let account_id =
                     AccountId::from_str(&action.account_id).expect("Invalid account_id");
-                if account_id.is_implicit() {
+                if account_id.get_account_type() == AccountType::NearImplicitAccount {
                     let bytes = hex::decode(&account_id.as_str()).expect("Invalid hex");
                     let public_key = PublicKey::ED25519(bytes.as_slice().try_into().unwrap());
                     pairs.insert(
