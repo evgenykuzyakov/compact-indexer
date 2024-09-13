@@ -100,10 +100,14 @@ async fn main() {
         is_running,
     ));
 
-    listen_blocks(receiver, write_redis_db).await;
+    listen_blocks(receiver, write_redis_db, chain_id).await;
 }
 
-async fn listen_blocks(mut stream: mpsc::Receiver<BlockWithTxHashes>, mut redis_db: RedisDB) {
+async fn listen_blocks(
+    mut stream: mpsc::Receiver<BlockWithTxHashes>,
+    mut redis_db: RedisDB,
+    chain_id: ChainId,
+) {
     while let Some(streamer_message) = stream.recv().await {
         let block_height = streamer_message.block.header.height;
         tracing::log::info!(target: PROJECT_ID, "Processing block: {}", block_height);
@@ -111,23 +115,23 @@ async fn listen_blocks(mut stream: mpsc::Receiver<BlockWithTxHashes>, mut redis_
 
         let mut to_update: HashMap<String, Vec<(String, String)>> = HashMap::new();
 
-        let ft_pairs = extract_ft_pairs(&actions, &events);
-        let accounts = extract_all_accounts(&actions);
+        let ft_pairs = extract_ft_pairs(&actions, &events, chain_id);
+        let accounts = extract_all_accounts(&actions, chain_id);
 
         add_pairs_to_update("ft", ft_pairs.clone(), &mut to_update, block_height);
         add_pairs_to_update(
             "nf",
-            extract_nft_pairs(&actions, &events),
+            extract_nft_pairs(&actions, &events, chain_id),
             &mut to_update,
             block_height,
         );
         add_pairs_to_update(
             "st",
-            extract_staking_pairs(&actions),
+            extract_staking_pairs(&actions, chain_id),
             &mut to_update,
             block_height,
         );
-        let public_key_updates = extract_public_keys(&actions);
+        let public_key_updates = extract_public_keys(&actions, chain_id);
 
         tracing::log::info!(target: PROJECT_ID, "Updating {} accounts, {} keys", to_update.len(), public_key_updates.len());
         // tracing::log::info!(target: PROJECT_ID, "Updating keys {:?}", public_key_updates);
@@ -181,14 +185,16 @@ async fn listen_blocks(mut stream: mpsc::Receiver<BlockWithTxHashes>, mut redis_
     }
 }
 
-fn extract_staking_pairs(actions: &[ActionRow]) -> HashSet<PairUpdate> {
+fn extract_staking_pairs(actions: &[ActionRow], _chain_id: ChainId) -> HashSet<PairUpdate> {
     // Extract matching (account_id, validator_id) for staking changes
     let mut pairs = HashSet::new();
     for action in actions {
         if action.status != ReceiptStatus::Success || action.action != ActionKind::FunctionCall {
             continue;
         }
-        if action.account_id.ends_with(".poolv1.near") || action.account_id.ends_with(".pool.near")
+        if action.account_id.ends_with(".poolv1.near")
+            || action.account_id.ends_with(".pool.near")
+            || action.account_id.ends_with(".pool.f863973.m0")
         {
             pairs.insert(PairUpdate {
                 account_id: action.predecessor_id.clone(),
@@ -200,7 +206,10 @@ fn extract_staking_pairs(actions: &[ActionRow]) -> HashSet<PairUpdate> {
     pairs
 }
 
-fn extract_public_keys(actions: &[ActionRow]) -> HashMap<PublicKeyPair, PublicKeyUpdateType> {
+fn extract_public_keys(
+    actions: &[ActionRow],
+    _chain_id: ChainId,
+) -> HashMap<PublicKeyPair, PublicKeyUpdateType> {
     // Extract matching (account_id, validator_id) for staking changes
     let mut pairs = HashMap::new();
     for action in actions {
@@ -263,7 +272,11 @@ fn extract_public_keys(actions: &[ActionRow]) -> HashMap<PublicKeyPair, PublicKe
     pairs
 }
 
-fn extract_ft_pairs(actions: &[ActionRow], events: &[EventRow]) -> HashSet<PairUpdate> {
+fn extract_ft_pairs(
+    actions: &[ActionRow],
+    events: &[EventRow],
+    _chain_id: ChainId,
+) -> HashSet<PairUpdate> {
     // Extract matching (account_id, token_id) for FT changes
     let mut pairs = HashSet::new();
     for action in actions {
@@ -274,6 +287,7 @@ fn extract_ft_pairs(actions: &[ActionRow], events: &[EventRow]) -> HashSet<PairU
         if token_id.ends_with(".poolv1.near")
             || token_id.ends_with(".pool.near")
             || token_id.ends_with(".lockup.near")
+            || token_id.ends_with(".pool.f863973.m0")
         {
             continue;
         }
@@ -290,7 +304,11 @@ fn extract_ft_pairs(actions: &[ActionRow], events: &[EventRow]) -> HashSet<PairU
                 });
             }
         }
-        if token_id.ends_with(".factory.bridge.near") || token_id == "aurora" {
+        if token_id.ends_with(".factory.bridge.near")
+            || token_id == "aurora"
+            || token_id.ends_with(".factory.sepolia.testnet")
+            || token_id.ends_with(".factory.goerli.testnet")
+        {
             if ["mint", "burn"].contains(&method_name.as_str()) {
                 if let Some(account_id) = action.args_account_id.as_ref() {
                     pairs.insert(PairUpdate {
@@ -362,7 +380,11 @@ fn extract_ft_pairs(actions: &[ActionRow], events: &[EventRow]) -> HashSet<PairU
     pairs
 }
 
-fn extract_nft_pairs(actions: &[ActionRow], events: &[EventRow]) -> HashSet<PairUpdate> {
+fn extract_nft_pairs(
+    actions: &[ActionRow],
+    events: &[EventRow],
+    _chain_id: ChainId,
+) -> HashSet<PairUpdate> {
     // Extract matching (account_id, token_id) for FT changes
     let mut pairs = HashSet::new();
     for action in actions {
@@ -446,7 +468,7 @@ fn add_pairs_to_update(
     }
 }
 
-fn extract_all_accounts(actions: &[ActionRow]) -> HashSet<String> {
+fn extract_all_accounts(actions: &[ActionRow], _chain_id: ChainId) -> HashSet<String> {
     actions
         .iter()
         .filter_map(|action| {
