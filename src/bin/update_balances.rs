@@ -8,7 +8,7 @@ use std::env;
 
 use crate::rpc::*;
 use dotenv::dotenv;
-use near_indexer::near_primitives::types::BlockHeight;
+use fastnear_primitives::near_primitives::types::BlockHeight;
 use serde::{Deserialize, Serialize};
 
 const PROJECT_ID: &str = "update_balances";

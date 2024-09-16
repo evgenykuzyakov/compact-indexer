@@ -1,6 +1,6 @@
 use base64::prelude::*;
-use near_indexer::near_primitives::serialize::dec_format;
-use near_indexer::near_primitives::types::{AccountId, BlockHeight};
+use fastnear_primitives::near_primitives::serialize::dec_format;
+use fastnear_primitives::near_primitives::types::{AccountId, BlockHeight};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
