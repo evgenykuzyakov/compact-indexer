@@ -2,7 +2,7 @@
 name = "compact-indexer"
 version = "0.12.1"
 authors = ["Eugene The Dream"]
-rust-version = "1.71.0"
+rust-version = "1.79.0"
 edition = "2021"
 
 [[bin]]
