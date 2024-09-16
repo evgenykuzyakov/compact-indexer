@@ -178,14 +178,16 @@ async fn listen_blocks(
                 .arg(block_height)
                 .ignore();
 
-            pipe.cmd("RPUSH")
-                .arg("ft_updates")
-                .arg(json!({
-                    "block_height": block_height,
-                    "pairs": ft_pairs.iter().map(|pair| format!("{}:{}", pair.token_id, pair.account_id)).collect::<Vec<_>>(),
-                    "accounts": &accounts
-                }).to_string())
-                .ignore();
+            if !ft_pairs.is_empty() {
+                pipe.cmd("RPUSH")
+                    .arg("ft_updates")
+                    .arg(json!({
+                        "block_height": block_height,
+                        "pairs": ft_pairs.iter().map(|pair| format!("{}:{}", pair.token_id, pair.account_id)).collect::<Vec<_>>(),
+                        "accounts": &accounts
+                    }).to_string())
+                    .ignore();
+            }
 
             pipe.query_async(connection).await
         });
