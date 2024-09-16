@@ -78,19 +78,27 @@ async fn main() {
         .height;
     tracing::log::info!(target: PROJECT_ID, "First redis block {}", first_block_height);
 
-    let last_block_height: BlockHeight = write_redis_db
+    let last_block_height: Option<BlockHeight> = write_redis_db
         .get("meta:latest_block")
         .await
         .expect("Failed to get the latest block")
-        .map(|s| s.parse().unwrap())
-        .expect("Failed to parse the latest block");
+        .map(|s| s.parse().expect("Failed to parse the latest block"));
 
-    tracing::log::info!(target: PROJECT_ID, "Resuming from {}", last_block_height);
+    let start_block_height = last_block_height.map(|b| b + 1).unwrap_or_else(|| {
+        std::env::var("START_BLOCK")
+            .map(|s| s.parse().expect("Failed to parse START_BLOCK"))
+            .expect("START_BLOCK is not set")
+    });
+    tracing::log::info!(target: PROJECT_ID, "Resuming from {}", start_block_height);
+
+    let num_threads = std::env::var("NUM_THREADS")
+        .map(|s| s.parse::<u64>().expect("Failed to parse NUM_THREADS"))
+        .unwrap_or(4);
 
     let (sender, receiver) = mpsc::channel(100);
     let config = fetcher::FetcherConfig {
-        num_threads: 4,
-        start_block_height: last_block_height + 1,
+        num_threads,
+        start_block_height,
         chain_id,
     };
     tokio::spawn(fetcher::start_fetcher(
