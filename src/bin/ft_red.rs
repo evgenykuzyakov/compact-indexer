@@ -178,7 +178,7 @@ async fn listen_blocks(
                 .arg(block_height)
                 .ignore();
 
-            if !ft_pairs.is_empty() {
+            if !ft_pairs.is_empty() || !accounts.is_empty() {
                 pipe.cmd("RPUSH")
                     .arg("ft_updates")
                     .arg(json!({
