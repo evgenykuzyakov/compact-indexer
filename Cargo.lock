@@ -687,7 +687,7 @@ dependencies = [
 
 [[package]]
 name = "compact-indexer"
-version = "0.12.3"
+version = "0.12.4"
 dependencies = [
  "actix",
  "actix-rt",

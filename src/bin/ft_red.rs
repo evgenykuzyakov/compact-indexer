@@ -178,6 +178,11 @@ async fn listen_blocks(
                 .arg(block_height)
                 .ignore();
 
+            pipe.cmd("SET")
+                .arg("meta:latest_block_time")
+                .arg(streamer_message.block.header.timestamp_nanosec.to_string())
+                .ignore();
+
             if !ft_pairs.is_empty() || !accounts.is_empty() {
                 pipe.cmd("RPUSH")
                     .arg("ft_updates")
