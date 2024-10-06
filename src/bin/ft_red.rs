@@ -118,6 +118,7 @@ async fn listen_blocks(
 ) {
     while let Some(streamer_message) = stream.recv().await {
         let block_height = streamer_message.block.header.height;
+        let block_timestamp = streamer_message.block.header.timestamp_nanosec;
         tracing::log::info!(target: PROJECT_ID, "Processing block: {}", block_height);
         let (actions, events) = extract_rows(streamer_message);
 
@@ -176,6 +177,11 @@ async fn listen_blocks(
             pipe.cmd("SET")
                 .arg("meta:latest_block")
                 .arg(block_height)
+                .ignore();
+
+            pipe.cmd("SET")
+                .arg("meta:latest_block_time")
+                .arg(block_timestamp.to_string())
                 .ignore();
 
             if !ft_pairs.is_empty() || !accounts.is_empty() {
