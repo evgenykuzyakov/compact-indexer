@@ -1,0 +1,98 @@
+<?xml version="1.0"?>
+<clickhouse>
+    <path>./clickhouse-info/data</path>
+
+    <!-- Zookeeper (from Apache) configuration -->
+    <!-- https://clickhouse.com/docs/en/operations/server-configuration-parameters/settings#server-settings_zookeeper -->
+    <zookeeper>
+        <node>
+            <host>localhost</host>
+            <port>2181</port>
+        </node>
+    </zookeeper>
+
+    <!-- https://clickhouse.com/docs/en/sql-reference/distributed-ddl -->
+    <distributed_ddl>
+        <!-- Path in ZooKeeper to queue with DDL queries -->
+        <path>/clickhouse/task_queue/ddl</path>
+
+        <!-- Settings from this profile will be used to execute DDL queries -->
+        <!-- <profile>default</profile> -->
+
+        <!-- Controls how much ON CLUSTER queries can be run simultaneously. -->
+        <!-- <pool_size>1</pool_size> -->
+
+        <!--
+             Cleanup settings (active tasks will not be removed)
+        -->
+
+        <!-- Controls task TTL (default 1 week) -->
+        <!-- <task_max_lifetime>604800</task_max_lifetime> -->
+
+        <!-- Controls how often cleanup should be performed (in seconds) -->
+        <!-- <cleanup_delay_period>60</cleanup_delay_period> -->
+
+        <!-- Controls how many tasks could be in the queue -->
+        <!-- <max_tasks_in_queue>1000</max_tasks_in_queue> -->
+
+        <!-- Host name of the current node. If specified, will only compare and not resolve hostnames inside the DDL tasks -->
+        <!-- <host_name>replica</host_name> -->
+    </distributed_ddl>
+
+    <!-- Macros for Shard and Replica -->
+    <!-- https://clickhouse.com/docs/en/operations/server-configuration-parameters/settings#macros -->
+    <macros>
+        <shard>1</shard>
+        <replica>localhost</replica> <!-- Replica name (machine hostname or any unique identifier) -->
+    </macros>
+
+    <!-- Port for communication between replicas. Used for data exchange.
+     It provides low-level data access between servers.
+     This port should not be accessible from untrusted networks.
+     See also 'interserver_http_credentials'.
+     Data transferred over connections to this port should not go through untrusted networks.
+     See also 'interserver_https_port'. -->
+    <!-- https://clickhouse.com/docs/en/operations/server-configuration-parameters/settings#interserver-http-port -->
+    <interserver_http_port>9009</interserver_http_port>
+
+    <!-- Cluster configuration to match ClickHouse schema import -->
+    <!-- https://clickhouse.com/docs/en/operations/server-configuration-parameters/settings#server-settings-remote-servers -->
+    <remote_servers>
+        <cluster1>
+            <shard>
+                <replica>
+                    <host>localhost</host>
+                    <port>9000</port>
+                </replica>
+            </shard>
+        </cluster1>
+    </remote_servers>
+
+    <listen_host>0.0.0.0</listen_host>
+    <http_port>8123</http_port>
+    <tcp_port>9000</tcp_port>
+
+    <!-- Apparently we need this -->
+    <profiles>
+        <default>
+        </default>
+    </profiles>
+
+    <logger>
+        <level>debug</level>
+        <log>./clickhouse-info/logs/clickhouse-server.log</log>
+        <errorlog>./clickhouse-info/logs/clickhouse-server.err.log</errorlog>
+    </logger>
+
+    <users>
+        <default>
+            <password></password>
+            <networks>
+                <ip>::/0</ip>
+            </networks>
+            <profile>default</profile>
+            <quota>default</quota>
+        </default>
+    </users>
+</clickhouse>
+
