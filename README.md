@@ -52,7 +52,6 @@ CREATE TABLE near.repl_actions_tx on CLUSTER cluster1
     INDEX signer_id_bloom_index signer_id TYPE bloom_filter() GRANULARITY 1,
     INDEX block_hash_bloom_index block_hash TYPE bloom_filter() GRANULARITY 1,
     INDEX transaction_hash_bloom_index transaction_hash TYPE bloom_filter() GRANULARITY 1,
-    INDEX receipt_hash_bloom_index receipt_hash TYPE bloom_filter() GRANULARITY 1,
     INDEX precise_public_key_bloom_index public_key TYPE bloom_filter(0.001) GRANULARITY 1,
     INDEX predecessor_id_bloom_index predecessor_id TYPE bloom_filter() GRANULARITY 1,
     INDEX method_name_index method_name TYPE set(0) GRANULARITY 1,
