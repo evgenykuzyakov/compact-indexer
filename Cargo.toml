@@ -1,6 +1,6 @@
 [package]
 name = "compact-indexer"
-version = "0.12.4"
+version = "0.12.5"
 authors = ["Eugene The Dream"]
 rust-version = "1.79.0"
 edition = "2021"

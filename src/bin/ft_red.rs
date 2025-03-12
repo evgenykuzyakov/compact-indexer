@@ -21,10 +21,6 @@ use tokio::sync::mpsc;
 
 const PROJECT_ID: &str = "ft_red";
 
-const FINAL_BLOCKS_KEY: &str = "final_blocks";
-const BLOCK_KEY: &str = "block";
-const SAFE_OFFSET: u64 = 100;
-
 #[derive(Debug, Eq, PartialEq, Hash, Clone)]
 pub struct PairUpdate {
     account_id: String,
@@ -355,6 +351,20 @@ fn extract_ft_pairs(
                 account_id: action.predecessor_id.clone(),
                 token_id: token_id.clone(),
             });
+            if let Some(account_id) = action.args_receiver_id.as_ref() {
+                pairs.insert(PairUpdate {
+                    account_id: account_id.clone(),
+                    token_id: token_id.clone(),
+                });
+            }
+        }
+        if method_name == "ft_resolve_transfer" {
+            if let Some(account_id) = action.args_sender_id.as_ref() {
+                pairs.insert(PairUpdate {
+                    account_id: account_id.clone(),
+                    token_id: token_id.clone(),
+                });
+            }
             if let Some(account_id) = action.args_receiver_id.as_ref() {
                 pairs.insert(PairUpdate {
                     account_id: account_id.clone(),
