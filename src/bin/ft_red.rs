@@ -73,6 +73,7 @@ async fn main() {
         .header
         .height;
     tracing::log::info!(target: PROJECT_ID, "First redis block {}", first_block_height);
+    let auth_bearer_token = std::env::var("AUTH_BEARER_TOKEN").ok();
 
     let last_block_height: Option<BlockHeight> = write_redis_db
         .get("meta:latest_block")
@@ -92,17 +93,14 @@ async fn main() {
         .unwrap_or(4);
 
     let (sender, receiver) = mpsc::channel(100);
-    let config = fetcher::FetcherConfig {
-        num_threads,
-        start_block_height,
-        chain_id,
-    };
-    tokio::spawn(fetcher::start_fetcher(
-        Some(client),
-        config,
-        sender,
-        is_running,
-    ));
+    let mut builder = fetcher::FetcherConfigBuilder::new()
+        .chain_id(chain_id)
+        .num_threads(num_threads)
+        .start_block_height(start_block_height);
+    if let Some(auth_bearer_token) = auth_bearer_token {
+        builder = builder.auth_bearer_token(auth_bearer_token);
+    }
+    tokio::spawn(fetcher::start_fetcher(builder.build(), sender, is_running));
 
     listen_blocks(receiver, write_redis_db, chain_id).await;
 }
