@@ -1,8 +1,8 @@
 [package]
 name = "compact-indexer"
-version = "0.12.5"
+version = "0.12.6"
 authors = ["Eugene The Dream"]
-rust-version = "1.84.0"
+rust-version = "1.85.0"
 edition = "2021"
 
 [[bin]]
@@ -88,8 +88,8 @@ hex = "0.4.3"
 reqwest = { version = "0.12.2", features = ["json"] }
 base64 = "0.21.5"
 
-fastnear-primitives = "0.3.1"
-fastnear-neardata-fetcher = "0.3.1"
-near-crypto = "0.29.2"
+fastnear-primitives = "0.3.2-rc.1"
+fastnear-neardata-fetcher = "0.3.2-rc.1"
+near-crypto = "0.30.0-rc.1"
 
 ctrlc = "3.4.4"
