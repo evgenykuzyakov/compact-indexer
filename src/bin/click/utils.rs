@@ -375,6 +375,7 @@ pub fn extract_rows(msg: BlockWithTxHashes) -> (Vec<ActionRow>, Vec<EventRow>) {
                     }
                 }
                 ReceiptEnumView::Data { .. } => {}
+                ReceiptEnumView::GlobalContractDistribution { .. } => {}
             }
             receipt_index = receipt_index
                 .checked_add(1)
