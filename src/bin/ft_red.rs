@@ -113,7 +113,12 @@ async fn listen_blocks(
     while let Some(streamer_message) = stream.recv().await {
         let block_height = streamer_message.block.header.height;
         let block_timestamp = streamer_message.block.header.timestamp_nanosec;
-        tracing::log::info!(target: PROJECT_ID, "Processing block: {}", block_height);
+        let current_time_ns = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos() as u64;
+        let time_diff_ns = current_time_ns.saturating_sub(block_timestamp);
+        tracing::log::info!(target: PROJECT_ID, "Processing block {}\tlatency {:.3} sec", block_height, time_diff_ns as f64 / 1e9f64);
         let (actions, events) = extract_rows(streamer_message);
 
         let mut to_update: HashMap<String, Vec<(String, String)>> = HashMap::new();
