@@ -90,7 +90,7 @@ async fn main() {
                     update_balances(&mut redis_db, updates, &config, true).await;
                 }
                 if count < batch_size {
-                    tracing::info!(target: PROJECT_ID, "Backfill completed", count);
+                    tracing::info!(target: PROJECT_ID, "Backfill completed");
                     break;
                 }
             }
