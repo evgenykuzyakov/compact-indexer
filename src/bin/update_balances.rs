@@ -70,7 +70,7 @@ async fn main() {
         if batch_size > 1 {
             tracing::info!(target: PROJECT_ID, "Backfill using batch size: {}", batch_size);
             loop {
-                let response: redis::RedisResult<Vec<String>> =
+                let response: redis::RedisResult<(Vec<String>,)> =
                     with_retries!(redis_db, |connection| async {
                         redis::pipe()
                             .cmd("LRANGE")
@@ -80,14 +80,15 @@ async fn main() {
                             .query_async(connection)
                             .await
                     });
-                let updates: Vec<String> = response.expect("Failed to get ft_updates");
+                let updates: (Vec<String>,) = response.expect("Failed to get ft_updates");
                 let updates: Vec<BlockUpdate> = updates
+                    .0
                     .into_iter()
                     .map(|s| serde_json::from_str(&s).expect("Invalid JSON"))
                     .collect();
                 let count = updates.len();
                 if !updates.is_empty() {
-                    update_balances(&mut redis_db, updates, &config, true).await;
+                    update_balances(&mut redis_db, updates, &config, false).await;
                 }
                 if count < batch_size {
                     tracing::info!(target: PROJECT_ID, "Backfill completed");
