@@ -59,7 +59,43 @@ async fn main() {
         let f = std::fs::File::open(path).expect("Failed to open backfill file");
         let ft_update: BlockUpdate =
             serde_json::from_reader(f).expect("Failed to read backfill file");
-        update_balances(&mut redis_db, ft_update, &config, true).await;
+        update_balances(&mut redis_db, vec![ft_update], &config, true).await;
+    }
+
+    let balances_batch_size: Option<usize> = env::var("BALANCES_BATCH_SIZE")
+        .ok()
+        .and_then(|s| s.parse().ok());
+
+    if let Some(batch_size) = balances_batch_size {
+        if batch_size > 1 {
+            tracing::info!(target: PROJECT_ID, "Backfill using batch size: {}", batch_size);
+            loop {
+                let response: redis::RedisResult<(Vec<String>,)> =
+                    with_retries!(redis_db, |connection| async {
+                        redis::pipe()
+                            .cmd("LRANGE")
+                            .arg("ft_updates")
+                            .arg("0")
+                            .arg(batch_size - 1)
+                            .query_async(connection)
+                            .await
+                    });
+                let updates: (Vec<String>,) = response.expect("Failed to get ft_updates");
+                let updates: Vec<BlockUpdate> = updates
+                    .0
+                    .into_iter()
+                    .map(|s| serde_json::from_str(&s).expect("Invalid JSON"))
+                    .collect();
+                let count = updates.len();
+                if !updates.is_empty() {
+                    update_balances(&mut redis_db, updates, &config, false).await;
+                }
+                if count < batch_size {
+                    tracing::info!(target: PROJECT_ID, "Backfill completed");
+                    break;
+                }
+            }
+        }
     }
 
     loop {
@@ -76,31 +112,44 @@ async fn main() {
         });
         let (s,) = response.expect("Failed to get ft_updates");
         let ft_updates: BlockUpdate = serde_json::from_str(&s).expect("Invalid JSON");
-        update_balances(&mut redis_db, ft_updates, &config, false).await;
+        update_balances(&mut redis_db, vec![ft_updates], &config, false).await;
     }
 }
 
 async fn update_balances(
     redis_db: &mut RedisDB,
-    block_update: BlockUpdate,
+    block_updates: Vec<BlockUpdate>,
     config: &Config,
     backfill: bool,
 ) {
-    let accounts = block_update.accounts.unwrap_or_default();
+    if block_updates.is_empty() {
+        tracing::info!(target: PROJECT_ID, "No block updates to process");
+        return;
+    }
+    let count = block_updates.len();
+    let block_height = block_updates.last().unwrap().block_height;
+    let mut pairs = vec![];
+    let mut accounts = vec![];
+    for block_update in block_updates {
+        pairs.extend(block_update.pairs);
+        if let Some(accs) = block_update.accounts {
+            accounts.extend(accs);
+        }
+    }
 
     let mut tasks = vec![];
     // Pair tasks
-    tasks.extend(block_update.pairs.iter().map(|pair| {
+    tasks.extend(pairs.iter().map(|pair| {
         let (token_id, account_id) = pair.split_once(':').unwrap();
         let account_id = account_id.to_string();
         RpcTask::FtPair {
-            block_height: Some(block_update.block_height),
+            block_height: Some(block_height),
             token_id: token_id.to_string(),
             account_id: account_id.to_string(),
         }
     }));
     tasks.extend(accounts.iter().map(|account_id| RpcTask::AccountState {
-        block_height: Some(block_update.block_height),
+        block_height: Some(block_height),
         account_id: account_id.clone(),
     }));
 
@@ -134,7 +183,7 @@ async fn update_balances(
     // Save balances to redis
     let res: redis::RedisResult<()> = with_retries!(redis_db, |connection| async {
         let mut pipe = redis::pipe();
-        pipe.cmd("LPOP").arg("ft_updates").ignore();
+        pipe.cmd("LPOP").arg("ft_updates").arg(count).ignore();
         for RpcResultPair { task, result } in &results {
             match task {
                 RpcTask::FtPair {
@@ -247,14 +296,14 @@ async fn update_balances(
         if !backfill {
             pipe.cmd("SET")
                 .arg("meta:latest_balance_block")
-                .arg(block_update.block_height)
+                .arg(block_height)
                 .ignore();
         }
         pipe.query_async(connection).await
     });
     res.expect("Failed to update");
 
-    tracing::info!(target: PROJECT_ID, "Updated {} tasks for block {}{}", tasks.len(), block_update.block_height, if backfill { " (backfill)" } else { "" });
+    tracing::info!(target: PROJECT_ID, "Updated {} tasks for block {}{}", tasks.len(), block_height, if count > 1 || backfill { " (backfill)" } else { "" });
 
     // Delete pending update
     if backfill {

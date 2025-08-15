@@ -40,6 +40,10 @@ pub enum ActionKind {
     DeleteKey = 7,
     DeleteAccount = 8,
     Delegate = 9,
+    DeployGlobalContract = 10,
+    DeployGlobalContractByAccountId = 11,
+    UseGlobalContract = 12,
+    UseGlobalContractByAccountId = 13,
 }
 
 #[derive(Row, Serialize)]

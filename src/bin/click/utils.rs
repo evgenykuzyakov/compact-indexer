@@ -126,6 +126,7 @@ pub fn extract_rows(msg: BlockWithTxHashes) -> (Vec<ActionRow>, Vec<EventRow>) {
                 receiver_id: account_id,
                 receipt_id,
                 receipt,
+                priority,
             } = outcome.receipt;
             let predecessor_id = predecessor_id.to_string();
             let account_id = account_id.to_string();
@@ -240,6 +241,18 @@ pub fn extract_rows(msg: BlockWithTxHashes) -> (Vec<ActionRow>, Vec<EventRow>) {
                                 ActionView::DeleteKey { .. } => ActionKind::DeleteKey,
                                 ActionView::DeleteAccount { .. } => ActionKind::DeleteAccount,
                                 ActionView::Delegate { .. } => ActionKind::Delegate,
+                                ActionView::DeployGlobalContract { .. } => {
+                                    ActionKind::DeployGlobalContract
+                                }
+                                ActionView::DeployGlobalContractByAccountId { .. } => {
+                                    ActionKind::DeployGlobalContractByAccountId
+                                }
+                                ActionView::UseGlobalContract { .. } => {
+                                    ActionKind::UseGlobalContract
+                                }
+                                ActionView::UseGlobalContractByAccountId { .. } => {
+                                    ActionKind::UseGlobalContractByAccountId
+                                }
                             },
                             contract_hash: match &action {
                                 ActionView::DeployContract { code } => {
@@ -362,6 +375,7 @@ pub fn extract_rows(msg: BlockWithTxHashes) -> (Vec<ActionRow>, Vec<EventRow>) {
                     }
                 }
                 ReceiptEnumView::Data { .. } => {}
+                ReceiptEnumView::GlobalContractDistribution { .. } => {}
             }
             receipt_index = receipt_index
                 .checked_add(1)

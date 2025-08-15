@@ -47,12 +47,23 @@ async fn main() {
 
     let is_running = Arc::new(AtomicBool::new(true));
     let ctrl_c_running = is_running.clone();
-
-    ctrlc::set_handler(move || {
-        ctrl_c_running.store(false, Ordering::SeqCst);
-        println!("Received Ctrl+C, starting shutdown...");
-    })
-    .expect("Error setting Ctrl+C handler");
+    tokio::spawn(async move {
+        let mut signals = signal_hook::iterator::Signals::new(&[
+            signal_hook::consts::SIGTERM,
+            signal_hook::consts::SIGINT,
+        ])
+        .unwrap();
+        for sig in signals.forever() {
+            match sig {
+                signal_hook::consts::SIGTERM | signal_hook::consts::SIGINT => {
+                    println!("Received signal {}, shutting down...", sig);
+                    ctrl_c_running.store(false, Ordering::SeqCst);
+                    break;
+                }
+                _ => unreachable!(),
+            }
+        }
+    });
 
     common::setup_tracing("ft_red=info,redis=info,clickhouse=info,neardata-fetcher=info");
 
@@ -73,6 +84,7 @@ async fn main() {
         .header
         .height;
     tracing::log::info!(target: PROJECT_ID, "First redis block {}", first_block_height);
+    let auth_bearer_token = std::env::var("AUTH_BEARER_TOKEN").ok();
 
     let last_block_height: Option<BlockHeight> = write_redis_db
         .get("meta:latest_block")
@@ -92,17 +104,14 @@ async fn main() {
         .unwrap_or(4);
 
     let (sender, receiver) = mpsc::channel(100);
-    let config = fetcher::FetcherConfig {
-        num_threads,
-        start_block_height,
-        chain_id,
-    };
-    tokio::spawn(fetcher::start_fetcher(
-        Some(client),
-        config,
-        sender,
-        is_running,
-    ));
+    let mut builder = fetcher::FetcherConfigBuilder::new()
+        .chain_id(chain_id)
+        .num_threads(num_threads)
+        .start_block_height(start_block_height);
+    if let Some(auth_bearer_token) = auth_bearer_token {
+        builder = builder.auth_bearer_token(auth_bearer_token);
+    }
+    tokio::spawn(fetcher::start_fetcher(builder.build(), sender, is_running));
 
     listen_blocks(receiver, write_redis_db, chain_id).await;
 }
@@ -115,7 +124,12 @@ async fn listen_blocks(
     while let Some(streamer_message) = stream.recv().await {
         let block_height = streamer_message.block.header.height;
         let block_timestamp = streamer_message.block.header.timestamp_nanosec;
-        tracing::log::info!(target: PROJECT_ID, "Processing block: {}", block_height);
+        let current_time_ns = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos() as u64;
+        let time_diff_ns = current_time_ns.saturating_sub(block_timestamp);
+        tracing::log::info!(target: PROJECT_ID, "Processing block {}\tlatency {:.3} sec", block_height, time_diff_ns as f64 / 1e9f64);
         let (actions, events) = extract_rows(streamer_message);
 
         let mut to_update: HashMap<String, Vec<(String, String)>> = HashMap::new();

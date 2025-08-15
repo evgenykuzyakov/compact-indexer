@@ -1,37 +1,13 @@
 [package]
 name = "compact-indexer"
-version = "0.12.5"
+version = "0.31.0"
 authors = ["Eugene The Dream"]
-rust-version = "1.79.0"
+rust-version = "1.86.0"
 edition = "2021"
-
-[[bin]]
-name = "compact-indexer"
-path = "src/bin/node.rs"
-
-[[bin]]
-name = "lake-indexer"
-path = "src/bin/lake.rs"
-
-[[bin]]
-name = "redis-indexer"
-path = "src/bin/red.rs"
 
 [[bin]]
 name = "ft-red"
 path = "src/bin/ft_red.rs"
-
-[[bin]]
-name = "inject-ft"
-path = "src/bin/inject_ft.rs"
-
-[[bin]]
-name = "lake-convert"
-path = "src/bin/lake_convert.rs"
-
-[[bin]]
-name = "export-ft"
-path = "src/bin/export_ft.rs"
 
 [[bin]]
 name = "update-balances"
@@ -40,15 +16,6 @@ path = "src/bin/update_balances.rs"
 [[bin]]
 name = "balances-backfill"
 path = "src/bin/balances_backfill.rs"
-
-[[bin]]
-name = "transfer-b-to-tb"
-path = "src/bin/transfer_b_to_tb.rs"
-
-[[bin]]
-name = "data-export"
-path = "src/bin/data_export.rs"
-
 
 [dependencies]
 actix = "=0.13.0"
@@ -78,11 +45,6 @@ itertools = "0.12.0"
 
 clickhouse = "0.11.6"
 
-### Locking versions for 1.69.0
-clap = "=4.2.4"
-anstyle = "=1.0.0"
-anstyle-parse = "=0.2.0"
-
 tar = "0.4"
 flate2 = "1.0"
 
@@ -93,8 +55,8 @@ hex = "0.4.3"
 reqwest = { version = "0.12.2", features = ["json"] }
 base64 = "0.21.5"
 
-fastnear-primitives = "0.0.2"
-fastnear-neardata-fetcher = "0.0.2"
-near-crypto = "0.23.0"
+fastnear-primitives = "0.31.0"
+fastnear-neardata-fetcher = "0.31.0"
+near-crypto = "0.31.0"
 
-ctrlc = "3.4.4"
+signal-hook = "0.3.18"
