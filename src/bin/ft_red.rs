@@ -47,12 +47,23 @@ async fn main() {
 
     let is_running = Arc::new(AtomicBool::new(true));
     let ctrl_c_running = is_running.clone();
-
-    ctrlc::set_handler(move || {
-        ctrl_c_running.store(false, Ordering::SeqCst);
-        println!("Received Ctrl+C, starting shutdown...");
-    })
-    .expect("Error setting Ctrl+C handler");
+    tokio::spawn(async move {
+        let mut signals = signal_hook::iterator::Signals::new(&[
+            signal_hook::consts::SIGTERM,
+            signal_hook::consts::SIGINT,
+        ])
+        .unwrap();
+        for sig in signals.forever() {
+            match sig {
+                signal_hook::consts::SIGTERM | signal_hook::consts::SIGINT => {
+                    println!("Received signal {}, shutting down...", sig);
+                    ctrl_c_running.store(false, Ordering::SeqCst);
+                    break;
+                }
+                _ => unreachable!(),
+            }
+        }
+    });
 
     common::setup_tracing("ft_red=info,redis=info,clickhouse=info,neardata-fetcher=info");
 
