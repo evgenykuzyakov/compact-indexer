@@ -2,3 +2,13 @@
 .env
 Cargo.lock
 res
+
+# ClickHouse
+# binary that is downloaded by user (README)
+clickhouse
+
+clickhouse-info/data/*
+!clickhouse-info/data/.gitkeep
+
+clickhouse-info/logs/*
+!clickhouse-info/logs/.gitkeep
