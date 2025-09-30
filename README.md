@@ -65,7 +65,7 @@ CREATE TABLE near.repl_actions_tx on CLUSTER cluster1
     ENGINE = ReplicatedReplacingMergeTree
 PRIMARY KEY (block_timestamp, account_id)
 ORDER BY (block_timestamp, account_id, receipt_index, action_index)
-                               
+
 CREATE TABLE actions_tx AS near.repl_actions_tx
 ENGINE = Distributed(cluster1, near, repl_actions_tx)
 
@@ -83,7 +83,7 @@ CREATE TABLE near.repl_events ON CLUSTER cluster1
     predecessor_id String COMMENT 'The account ID of the receipt predecessor',
     account_id String COMMENT 'The account ID of where the receipt is executed',
     status Enum('FAILURE', 'SUCCESS') COMMENT 'The status of the receipt execution, either SUCCESS or FAILURE',
-    
+
     version Nullable(String) COMMENT '`version` field from the JSON event',
     standard Nullable(String) COMMENT '`standard` field from the JSON event',
     event Nullable(String) COMMENT '`event` field from the JSON event',
@@ -117,6 +117,7 @@ ENGINE = Distributed(cluster1, near, repl_events)
 ## To run
 
 Create `.env` file and fill details:
+
 ```
 DATABASE_URL=https://FOOBAR.clickhouse.cloud:8443
 DATABASE_USER=default
@@ -129,4 +130,83 @@ Follow a NEAR RPC node setup instructions to get a node running.
 ```bash
 cargo build --release
 ./target/release/compact-indexer run
+```
+
+## Additional `.env` variables
+
+```.env
+# Redis URL to write data to
+# Used in ft_red, balances_backfill, and pool_owners_backfill
+# Type: string, a valid redis url with port
+WRITE_REDIS_URL=redis://localhost:6379
+
+# Denotes from which chain first block is pulled by fastnear-data-fetcher
+# Used in ft_red
+# Type: string, "mainnet" or "testnet"
+CHAIN_ID=mainnet
+
+# Used as starting point if there is no record of last processed block in WRITE_REDIS_URL
+# Used in ft_red
+# Type: integer
+START_BLOCK=
+
+# Bearer token for connecting to fastnear-data-fetcher api?
+# Used in ft_red
+# Type: string, optional
+# AUTH_BEARER_TOKEN=
+
+# How many threads do we want to use for fastnear-data-fetcher
+# Used in ft_red
+# Type: integer, optional, default is 4
+# NUM_THREADS=4
+
+# ???
+# Used in balances_backfill
+# Type: string, path to csv file
+EXPORT_FN=./export_file.csv
+
+# Redis URL to import data from
+# Used in balances_backfill and pool_owners_backfill
+# Type: string, a valid redis url with port
+EXPORT_READ_REDIS_URL=redis://localhost:6379
+
+# How many top users will be stored in WRITE_REDIS_URL
+# Used in update_balances
+# Type: integer, optional, default is 50
+MAX_TOP_HOLDERS_COUNT=50
+
+# Used to backfill data from file by update_balances????
+# Used in update_balances
+# Type: string, path to json file, optional
+BACKFILL_FILE=./miaw.json
+
+# How many balances will be updated in 1 batch from ft_updates field in WRITE_REDIS_URL
+# Used in update_balances
+# Type: integer, optional
+# BALANCES_BATCH_SIZE=5
+
+# List of RPCS to fetch info from
+# Used in rpc/mod.rs
+# Type: strings, comma separated list of RPCS
+RPCS=https://free.rpc.fastnear.com
+
+# Bearer token for authenticating to RPCS
+# Used in rpc/mod.rs
+# Type: string, bearer token, optional
+# RPC_BEARER_TOKEN=
+
+# Number of retries if request to rpc has failed
+# Used in rpc/mod.rs
+# Type: integer, optional, defaults to num of RPCS
+# RPC_NUM_ITERATIONS=5
+
+# ???
+# Used in rpc/mod.rs
+# Type: integer, optional, defaults to 100
+# RPC_CONCURRENCY=100
+
+# Timeout duration for jsonrpc request in miliseconds
+# Used in rpc/mod.rs
+# Type: integer, timeout duration in miliseconds, optional, defautls to 5000
+# RPC_TIMEOUT=5000
 ```

@@ -144,12 +144,11 @@ async fn listen_blocks(
             &mut to_update,
             block_height,
         );
-        add_pairs_to_update(
-            "st",
-            extract_staking_pairs(&actions, chain_id),
-            &mut to_update,
-            block_height,
-        );
+
+        let st_owner_updates = extract_staking_pool_creations(&actions, chain_id);
+        let st_pairs = extract_staking_pairs(&actions, chain_id);
+        add_pairs_to_update("st", st_pairs.clone(), &mut to_update, block_height);
+
         let public_key_updates = extract_public_keys(&actions, chain_id);
 
         tracing::log::info!(target: PROJECT_ID, "Updating {} accounts, {} keys", to_update.len(), public_key_updates.len());
@@ -184,6 +183,18 @@ async fn listen_blocks(
                 }
             }
 
+            for (owner, pools) in &st_owner_updates {
+                for pool in pools {
+                    pipe.cmd("HSET")
+                        .arg(format!("st_pool:{}", pool))
+                        .arg("owner_id")
+                        .arg(owner)
+                        .arg("latest_stake_block")
+                        .arg(block_height)
+                        .ignore();
+                }
+            }
+
             pipe.cmd("SET")
                 .arg("meta:latest_block")
                 .arg(block_height)
@@ -193,6 +204,16 @@ async fn listen_blocks(
                 .arg("meta:latest_block_time")
                 .arg(block_timestamp.to_string())
                 .ignore();
+
+            if !st_pairs.is_empty() {
+                pipe.cmd("RPUSH")
+                    .arg("st_updates")
+                    .arg(json!({
+                            "block_height": block_height,
+                            "st_pools": st_pairs.iter().map(|pair| pair.token_id.clone()).collect::<Vec<_>>(),
+                    }).to_string())
+                    .ignore();
+            }
 
             if !ft_pairs.is_empty() || !accounts.is_empty() {
                 pipe.cmd("RPUSH")
@@ -226,6 +247,41 @@ fn extract_staking_pairs(actions: &[ActionRow], _chain_id: ChainId) -> HashSet<P
                 account_id: action.predecessor_id.clone(),
                 token_id: action.account_id.clone(),
             });
+        }
+    }
+
+    pairs
+}
+
+fn extract_staking_pool_creations(
+    actions: &[ActionRow],
+    _chain_id: ChainId,
+) -> HashMap<String, HashSet<String>> {
+    let mut pairs: HashMap<String, HashSet<String>> = HashMap::new();
+
+    // NOTE: Maybe use "on_staking_pool_create" instead of "new"?
+    for action in actions {
+        if action.status != ReceiptStatus::Success
+            || action.action != ActionKind::FunctionCall
+            || action.method_name != Some("new".to_string())
+        {
+            continue;
+        }
+
+        if action.predecessor_id == "poolv1.near"
+            || action.predecessor_id == "pool.near"
+            || action.predecessor_id == "pool.f863973.m0"
+        {
+            let staking_pool_owner = action.args_owner_id.clone().unwrap();
+            let staking_pool = action.account_id.clone();
+
+            if let Some(pools_list) = pairs.get_mut(&staking_pool_owner) {
+                pools_list.insert(staking_pool);
+            } else {
+                let mut pools_set = HashSet::new();
+                pools_set.insert(staking_pool);
+                pairs.insert(staking_pool_owner, pools_set);
+            }
         }
     }
 
