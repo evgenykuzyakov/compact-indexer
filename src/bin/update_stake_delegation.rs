@@ -62,7 +62,7 @@ async fn main() {
         if batch_size > 1 {
             tracing::info!(target: PROJECT_ID, "Backfill using batch size: {}", batch_size);
             loop {
-                let response: redis::RedisResult<(Vec<String>,)> =
+                let response: redis::RedisResult<Vec<String>> =
                     with_retries!(redis_db, |connection| async {
                         redis::cmd("LRANGE")
                             .arg("st_updates")
@@ -71,9 +71,8 @@ async fn main() {
                             .query_async(connection)
                             .await
                     });
-                let updates: (Vec<String>,) = response.expect("Failed to get st_updates");
+                let updates: Vec<String> = response.expect("Failed to get st_updates");
                 let updates: Vec<BlockUpdate> = updates
-                    .0
                     .into_iter()
                     .map(|s| serde_json::from_str(&s).expect("Invalid JSON"))
                     .collect();
@@ -90,7 +89,7 @@ async fn main() {
     }
 
     loop {
-        let response: redis::RedisResult<(String,)> = with_retries!(redis_db, |connection| async {
+        let response: redis::RedisResult<String> = with_retries!(redis_db, |connection| async {
             redis::cmd("BLMOVE")
                 .arg("st_updates")
                 .arg("st_updates")
@@ -100,7 +99,7 @@ async fn main() {
                 .query_async(connection)
                 .await
         });
-        let (s,) = response.expect("Failed to get st_updates");
+        let s = response.expect("Failed to get st_updates");
         let st_updates: BlockUpdate = serde_json::from_str(&s).expect("Invalid JSON");
         update_auto_delegation(&mut redis_db, vec![st_updates], &rpc_config).await;
     }
@@ -120,7 +119,6 @@ async fn update_auto_delegation(
     let last_block_height = block_updates.last().unwrap().block_height;
     let mut unique_pools: HashMap<String, StakingPoolData> = HashMap::new();
 
-    // There should be a better way to create set of unique pools and then, without iterating over
     for block in &block_updates {
         let curr_epoch = block.block_height / EPOCH_DURATION;
 
