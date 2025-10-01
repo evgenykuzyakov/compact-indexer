@@ -54,11 +54,11 @@ async fn main() {
 
     let rpc_config = rpc::RpcConfig::from_env();
 
-    let balances_batch_size: Option<usize> = env::var("BALANCES_BATCH_SIZE")
+    let stake_delegation_batch_size: Option<usize> = env::var("STAKE_DELEGATION_BATCH_SIZES")
         .ok()
         .and_then(|s| s.parse().ok());
 
-    if let Some(batch_size) = balances_batch_size {
+    if let Some(batch_size) = stake_delegation_batch_size {
         if batch_size > 1 {
             tracing::info!(target: PROJECT_ID, "Backfill using batch size: {}", batch_size);
             loop {

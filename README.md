@@ -185,6 +185,11 @@ BACKFILL_FILE=./miaw.json
 # Type: integer, optional
 # BALANCES_BATCH_SIZE=5
 
+# How many stake delegations will be processed in 1 batch from st_updates field in WRITE_REDIS_URL
+# Used in updates_stake_delegation
+# Type: integer, optional
+# STAKE_DELEGATION_BATCH_SIZE=5
+
 # List of RPCS to fetch info from
 # Used in rpc/mod.rs
 # Type: strings, comma separated list of RPCS
