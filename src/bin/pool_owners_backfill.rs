@@ -2,6 +2,7 @@ mod common;
 mod redis_db;
 mod rpc;
 
+use fastnear_primitives::near_primitives::types::{BlockHeight, EpochHeight};
 use itertools::Itertools;
 use redis_db::RedisDB;
 use std::collections::{HashMap, HashSet};
@@ -14,6 +15,22 @@ use tracing_subscriber::fmt::format;
 
 const PROJECT_ID: &str = "pool_owners_backfill";
 const ST_POOL_INFO_KEY_PREF: &str = "st_pool_info";
+// Epoch len in blocks from docs.near
+const EPOCH_DURATION: u64 = 43_200;
+
+#[derive(Debug)]
+pub struct StakingPoolData {
+    pub latest_epoch: EpochHeight,
+    pub latest_interaction_block: BlockHeight,
+    pub first_interaction_block_in_epoch: BlockHeight,
+}
+
+#[derive(Debug)]
+pub struct StakingPoolSyncData {
+    pub pool_id: String,
+    pub latest_interaction_block: BlockHeight,
+    pub first_interaction_block_in_epoch: BlockHeight,
+}
 
 #[tokio::main]
 async fn main() {
@@ -36,13 +53,13 @@ async fn main() {
     process_owners(streamer, redis_db, &rpc_config).await;
 }
 
-fn redis_streamer() -> mpsc::Receiver<Vec<String>> {
+fn redis_streamer() -> mpsc::Receiver<Vec<StakingPoolSyncData>> {
     let (sender, receiver) = mpsc::channel(100);
     tokio::spawn(redis_start(sender));
     receiver
 }
 
-async fn redis_start(pairs_sync: mpsc::Sender<Vec<String>>) {
+async fn redis_start(pairs_sync: mpsc::Sender<Vec<StakingPoolSyncData>>) {
     let mut read_redis_db = RedisDB::new(Some(
         env::var("EXPORT_READ_REDIS_URL").expect("Missing env EXPORT_READ_REDIS_URL"),
     ))
@@ -81,7 +98,7 @@ async fn redis_start(pairs_sync: mpsc::Sender<Vec<String>>) {
     tracing::info!(target: PROJECT_ID, "Total delegators scanned: {}", total_accounts);
 
     // Collect all pools
-    let mut all_pools = HashSet::new();
+    let mut all_pools: HashMap<String, StakingPoolData> = HashMap::new();
     for (i, key) in delegators.iter().enumerate() {
         if i % 1000 == 0 {
             tracing::info!(target: PROJECT_ID, "Processed {} delegators out of {}. Total pools to check: {}", i, total_accounts, all_pools.len());
@@ -92,24 +109,38 @@ async fn redis_start(pairs_sync: mpsc::Sender<Vec<String>>) {
         .expect("Failed to get staking pools");
 
         // (staking_pool, block_height)
-        for (pool_id, _) in res {
+        for (pool_id, block_height) in res {
+            let block_height: BlockHeight = block_height.parse().unwrap_or(0);
+            let curr_epoch = block_height / EPOCH_DURATION;
+
             if pool_id.ends_with(".poolv1.near")
                 || pool_id.ends_with(".pool.near")
                 || pool_id.ends_with(".pool.f863973.m0")
             {
-                all_pools.insert(pool_id);
+                all_pools
+                    .entry(pool_id)
+                    .and_modify(|data| {
+                        if data.latest_epoch < curr_epoch {
+                            data.latest_epoch = curr_epoch;
+                            data.first_interaction_block_in_epoch = block_height;
+                        }
+
+                        data.latest_interaction_block = block_height;
+                    })
+                    .or_insert(StakingPoolData {
+                        latest_epoch: curr_epoch,
+                        latest_interaction_block: block_height,
+                        first_interaction_block_in_epoch: block_height,
+                    });
             }
         }
     }
 
     tracing::log::info!(target: PROJECT_ID, "Total pools collected: {}", all_pools.len());
 
-    // NOTE: not sure about processing it by chunks like this - won't this reallocate memory and be
-    // slower?
-    let all_pools = all_pools.iter().cloned().collect_vec();
     let mut total_pools_to_update = 0;
     let mut pools_to_update = vec![];
-    for pools_chunk in all_pools.chunks(1000) {
+    for pools_chunk in all_pools.keys().cloned().collect_vec().chunks(1000) {
         let owner_exists: Vec<i64> = with_retries!(read_redis_db, |connection| async {
             let mut pipe = redis::pipe();
 
@@ -125,7 +156,14 @@ async fn redis_start(pairs_sync: mpsc::Sender<Vec<String>>) {
         for (owner_exists, pool) in owner_exists.iter().zip(pools_chunk) {
             if *owner_exists == 0 {
                 total_pools_to_update += 1;
-                pools_to_update.push(pool.clone());
+                let pool = pool.clone();
+                let pool_data = all_pools.get(&pool).unwrap();
+
+                pools_to_update.push(StakingPoolSyncData {
+                    pool_id: pool.clone(),
+                    latest_interaction_block: pool_data.latest_interaction_block,
+                    first_interaction_block_in_epoch: pool_data.first_interaction_block_in_epoch,
+                });
                 if pools_to_update.len() == 1000 {
                     let mut new_to_update = vec![];
                     std::mem::swap(&mut new_to_update, &mut pools_to_update);
@@ -149,7 +187,7 @@ async fn redis_start(pairs_sync: mpsc::Sender<Vec<String>>) {
 }
 
 async fn process_owners(
-    mut stream: mpsc::Receiver<Vec<String>>,
+    mut stream: mpsc::Receiver<Vec<StakingPoolSyncData>>,
     mut redis_db: RedisDB,
     rpc_config: &rpc::RpcConfig,
 ) {
@@ -161,12 +199,20 @@ async fn process_owners(
     }
 }
 
-async fn update_owners(redis_db: &mut RedisDB, pools: Vec<String>, rpc_config: &rpc::RpcConfig) {
+async fn update_owners(
+    redis_db: &mut RedisDB,
+    pools: Vec<StakingPoolSyncData>,
+    rpc_config: &rpc::RpcConfig,
+) {
+    let pool_lookup: HashMap<String, &StakingPoolSyncData> = pools
+        .iter()
+        .map(|pool| (pool.pool_id.clone(), pool))
+        .collect();
     let mut tasks = vec![];
 
     tasks.extend(pools.iter().map(|pool| RpcTask::Custom {
         block_height: None,
-        account_id: pool.clone(),
+        account_id: pool.pool_id.clone(),
         method_name: "get_owner_id".to_string(),
         args: "".to_string(),
     }));
@@ -188,32 +234,31 @@ async fn update_owners(redis_db: &mut RedisDB, pools: Vec<String>, rpc_config: &
                 _ => unreachable!(),
             };
 
-            let owner_id = result.as_ref().unwrap().unwrap_as_custom().as_str();
+            if let Some(pool_data) = pool_lookup.get(pool_id) {
+                let owner_id = result.as_ref().unwrap().unwrap_as_custom().as_str();
+                if owner_id.is_none() {
+                    tracing::info!(target: PROJECT_ID, "No owner_id for pool_id {}", pool_id);
+                    continue;
+                }
+                let owner_id = owner_id.unwrap();
 
-            if owner_id.is_none() {
-                tracing::info!(target: PROJECT_ID, "No owner_id for pool_id {}", pool_id);
-                continue;
+                // Set the pool_owner for pool_id
+                // (st_pool_info of `pool_id` -> `owner_id:account_id`, `latest_stake_block:block_height`)
+                pipe.cmd("HSET")
+                    .arg(format!("{}:{}", ST_POOL_INFO_KEY_PREF, pool_id))
+                    .arg("owner_id")
+                    .arg(owner_id)
+                    .arg("latest_stake_block")
+                    .arg(pool_data.latest_interaction_block.to_string())
+                    .ignore();
+
+                // Add owner as automatically staked to this pool
+                pipe.cmd("HSET")
+                    .arg(format!("st:{}", owner_id))
+                    .arg(pool_id)
+                    .arg(pool_data.first_interaction_block_in_epoch.to_string())
+                    .ignore();
             }
-
-            let owner_id = owner_id.unwrap();
-
-            // Set the pool_owner for pool_id
-            // (st_pool_info of `pool_id` -> `owner_id:account_id`, `latest_stake_block:block_height`)
-            pipe.cmd("HSET")
-                .arg(format!("{}:{}", ST_POOL_INFO_KEY_PREF, pool_id))
-                .arg("owner_id")
-                .arg(owner_id)
-                .arg("latest_stake_block")
-                .arg("0")
-                .ignore();
-
-            // Add owner as automatically staked to this pool
-            // TODO: add adequate block height
-            pipe.cmd("HSET")
-                .arg(format!("st:{}", owner_id))
-                .arg(pool_id)
-                .arg("0")
-                .ignore();
         }
 
         pipe.query_async(connection).await
