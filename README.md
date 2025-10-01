@@ -160,7 +160,7 @@ START_BLOCK=
 # Type: integer, optional, default is 4
 # NUM_THREADS=4
 
-# ???
+# File to read ft balances from instead of redisDB, if running `balances-backfill export`
 # Used in balances_backfill
 # Type: string, path to csv file
 EXPORT_FN=./export_file.csv
@@ -205,7 +205,7 @@ RPCS=https://free.rpc.fastnear.com
 # Type: integer, optional, defaults to num of RPCS
 # RPC_NUM_ITERATIONS=5
 
-# ???
+# Maximum number of concurrent RPC requests + buffer size for results
 # Used in rpc/mod.rs
 # Type: integer, optional, defaults to 100
 # RPC_CONCURRENCY=100
