@@ -186,7 +186,7 @@ async fn listen_blocks(
             for (owner, pools) in &st_owner_updates {
                 for pool in pools {
                     pipe.cmd("HSET")
-                        .arg(format!("st_pool:{}", pool))
+                        .arg(format!("st_pool_info:{}", pool))
                         .arg("owner_id")
                         .arg(owner)
                         .arg("latest_stake_block")
