@@ -261,9 +261,9 @@ fn extract_staking_pool_creations(
 
     // NOTE: Maybe use "on_staking_pool_create" instead of "new"?
     for action in actions {
-        if action.status != ReceiptStatus::Success
+        if action.method_name != Some("new".to_string())
+            || action.status != ReceiptStatus::Success
             || action.action != ActionKind::FunctionCall
-            || action.method_name != Some("new".to_string())
         {
             continue;
         }
