@@ -2,9 +2,8 @@ mod common;
 mod redis_db;
 mod rpc;
 
-use fastnear_primitives::near_primitives::epoch_block_info;
+use common::EPOCH_DURATION;
 use fastnear_primitives::near_primitives::types::EpochHeight;
-use redis::RedisResult;
 use redis_db::RedisDB;
 use std::collections::HashMap;
 use std::env;
@@ -15,8 +14,6 @@ use fastnear_primitives::near_primitives::types::BlockHeight;
 use serde::{Deserialize, Serialize};
 
 const PROJECT_ID: &str = "update_stake_delegation";
-// Epoch len in blocks from docs.near
-const EPOCH_DURATION: u64 = 43_200;
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct BlockUpdate {

@@ -278,9 +278,7 @@ fn extract_staking_pool_creations(
             if let Some(pools_list) = pairs.get_mut(&staking_pool_owner) {
                 pools_list.insert(staking_pool);
             } else {
-                let mut pools_set = HashSet::new();
-                pools_set.insert(staking_pool);
-                pairs.insert(staking_pool_owner, pools_set);
+                pairs.insert(staking_pool_owner, HashSet::from([staking_pool]));
             }
         }
     }

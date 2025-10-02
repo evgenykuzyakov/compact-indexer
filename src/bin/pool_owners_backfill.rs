@@ -2,6 +2,7 @@ mod common;
 mod redis_db;
 mod rpc;
 
+use common::EPOCH_DURATION;
 use fastnear_primitives::near_primitives::types::{BlockHeight, EpochHeight};
 use itertools::Itertools;
 use redis_db::RedisDB;
@@ -11,12 +12,9 @@ use std::env;
 use crate::rpc::{fetch_from_rpc, RpcResultPair, RpcTask};
 use dotenv::dotenv;
 use tokio::sync::mpsc;
-use tracing_subscriber::fmt::format;
 
 const PROJECT_ID: &str = "pool_owners_backfill";
 const ST_POOL_INFO_KEY_PREF: &str = "st_pool_info";
-// Epoch len in blocks from docs.near
-const EPOCH_DURATION: u64 = 43_200;
 
 #[derive(Debug)]
 pub struct StakingPoolData {
@@ -108,7 +106,6 @@ async fn redis_start(pairs_sync: mpsc::Sender<Vec<StakingPoolSyncData>>) {
         })
         .expect("Failed to get staking pools");
 
-        // (staking_pool, block_height)
         for (pool_id, block_height) in res {
             let block_height: BlockHeight = block_height.parse().unwrap_or(0);
             let curr_epoch = block_height / EPOCH_DURATION;
