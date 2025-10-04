@@ -59,7 +59,7 @@ async fn main() {
         if batch_size > 1 {
             tracing::info!(target: PROJECT_ID, "Backfill using batch size: {}", batch_size);
             loop {
-                let response: redis::RedisResult<Vec<String>> =
+                let staking_updates_list: redis::RedisResult<Vec<String>> =
                     with_retries!(redis_db, |connection| async {
                         redis::cmd("LRANGE")
                             .arg("st_updates")
@@ -68,16 +68,16 @@ async fn main() {
                             .query_async(connection)
                             .await
                     });
-                let updates: Vec<String> = response.expect("Failed to get st_updates");
-                let updates: Vec<BlockUpdate> = updates
-                    .into_iter()
-                    .map(|s| serde_json::from_str(&s).expect("Invalid JSON"))
+                let block_updates_batch: Vec<BlockUpdate> = staking_updates_list
+                    .expect("Failed to get st_updates")
+                    .iter()
+                    .map(|s| serde_json::from_str(s).expect("Invalid JSON"))
                     .collect();
-                let count = updates.len();
-                if !updates.is_empty() {
-                    update_auto_delegation(&mut redis_db, updates, &rpc_config).await;
+                let num_of_updates = block_updates_batch.len();
+                if !block_updates_batch.is_empty() {
+                    update_auto_delegation(&mut redis_db, block_updates_batch, &rpc_config).await;
                 }
-                if count < batch_size {
+                if num_of_updates < batch_size {
                     tracing::info!(target: PROJECT_ID, "Backfill completed");
                     break;
                 }
@@ -86,52 +86,53 @@ async fn main() {
     }
 
     loop {
-        let response: redis::RedisResult<String> = with_retries!(redis_db, |connection| async {
-            redis::cmd("BLMOVE")
-                .arg("st_updates")
-                .arg("st_updates")
-                .arg("LEFT")
-                .arg("LEFT")
-                .arg(0)
-                .query_async(connection)
-                .await
-        });
-        let s = response.expect("Failed to get st_updates");
-        let st_updates: BlockUpdate = serde_json::from_str(&s).expect("Invalid JSON");
-        update_auto_delegation(&mut redis_db, vec![st_updates], &rpc_config).await;
+        let staking_update: redis::RedisResult<String> =
+            with_retries!(redis_db, |connection| async {
+                redis::cmd("BLMOVE")
+                    .arg("st_updates")
+                    .arg("st_updates")
+                    .arg("LEFT")
+                    .arg("LEFT")
+                    .arg(0)
+                    .query_async(connection)
+                    .await
+            });
+        let s = staking_update.expect("Failed to get st_updates");
+        let staking_update: BlockUpdate = serde_json::from_str(&s).expect("Invalid JSON");
+        update_auto_delegation(&mut redis_db, vec![staking_update], &rpc_config).await;
     }
 }
 
 async fn update_auto_delegation(
     redis_db: &mut RedisDB,
-    block_updates: Vec<BlockUpdate>,
+    staking_updates: Vec<BlockUpdate>,
     _config: &RpcConfig,
 ) {
-    if block_updates.is_empty() {
+    if staking_updates.is_empty() {
         tracing::info!(target: PROJECT_ID, "No block updates to process");
         return;
     }
-    let count = block_updates.len();
-    let first_block_height = block_updates.first().unwrap().block_height;
-    let last_block_height = block_updates.last().unwrap().block_height;
+    let staking_updates_count = staking_updates.len();
+    let first_block_height = staking_updates.first().unwrap().block_height;
+    let last_block_height = staking_updates.last().unwrap().block_height;
     let mut unique_pools: HashMap<String, StakingPoolData> = HashMap::new();
 
-    for block in &block_updates {
-        let curr_epoch = block.block_height / EPOCH_DURATION;
+    for block in &staking_updates {
+        let curr_block_epoch = block.block_height / EPOCH_DURATION;
 
         for pool in &block.st_pools {
             unique_pools
                 .entry(pool.clone())
                 .and_modify(|entry| {
-                    if entry.latest_epoch < curr_epoch {
-                        entry.latest_epoch = curr_epoch;
+                    if entry.latest_epoch < curr_block_epoch {
+                        entry.latest_epoch = curr_block_epoch;
                         entry.first_interaction_block_in_epoch = block.block_height;
                     }
 
                     entry.latest_interaction_block = block.block_height;
                 })
                 .or_insert(StakingPoolData {
-                    latest_epoch: curr_epoch,
+                    latest_epoch: curr_block_epoch,
                     latest_interaction_block: block.block_height,
                     first_interaction_block_in_epoch: block.block_height,
                 });
@@ -140,7 +141,7 @@ async fn update_auto_delegation(
 
     // Collect owner_stake delegation
     let mut owners_to_update: Vec<StakingFieldOwnerUpdate> = vec![];
-    for (staking_pool, data) in &unique_pools {
+    for (staking_pool, staking_pool_data) in &unique_pools {
         let res: redis::RedisResult<Vec<Option<String>>> =
             with_retries!(redis_db, |connection| async {
                 let mut pipe = redis::pipe();
@@ -156,7 +157,6 @@ async fn update_auto_delegation(
             });
 
         let vals = res.expect("Failed to get owner_id and latest_stake_block for pool");
-
         let owner_id = vals[0].clone().unwrap_or_default();
         let latest_stake_block: BlockHeight = vals[1]
             .clone()
@@ -165,23 +165,26 @@ async fn update_auto_delegation(
             .unwrap_or(0);
 
         let latest_interaction_epoch = latest_stake_block / EPOCH_DURATION;
-        if latest_interaction_epoch < data.latest_epoch {
+        if latest_interaction_epoch < staking_pool_data.latest_epoch {
             owners_to_update.push(StakingFieldOwnerUpdate {
                 staking_pool: staking_pool.to_string(),
                 owner_id,
-                internal_restake_block_height: data.first_interaction_block_in_epoch,
+                internal_restake_block_height: staking_pool_data.first_interaction_block_in_epoch,
             });
         }
     }
 
-    // Save balances to redis
+    // Save automatic stake delegations for owners to redis
     let res: redis::RedisResult<()> = with_retries!(redis_db, |connection| async {
         let mut pipe = redis::pipe();
-        pipe.cmd("LPOP").arg("st_updates").arg(count).ignore();
+        pipe.cmd("LPOP")
+            .arg("st_updates")
+            .arg(staking_updates_count)
+            .ignore();
 
-        // update latest_stake_block
+        // update latest_stake_block for later usage
         for (
-            pool,
+            pool_id,
             StakingPoolData {
                 latest_interaction_block,
                 ..
@@ -189,7 +192,7 @@ async fn update_auto_delegation(
         ) in &unique_pools
         {
             pipe.cmd("HSET")
-                .arg(format!("st_pool_info:{}", pool))
+                .arg(format!("st_pool_info:{}", pool_id))
                 .arg("latest_stake_block")
                 .arg(latest_interaction_block.to_string())
                 .ignore();
@@ -217,6 +220,6 @@ async fn update_auto_delegation(
         "Updated {} pools and {} owners for {}",
         unique_pools.len(),
         owners_to_update.len(),
-        if block_updates.len() > 1 { format!("blocks {}-{}", first_block_height, last_block_height) } else { format!("block {}", first_block_height) }
+        if staking_updates.len() > 1 { format!("blocks {}-{}", first_block_height, last_block_height) } else { format!("block {}", first_block_height) }
     );
 }

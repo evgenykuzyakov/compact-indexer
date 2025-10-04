@@ -63,11 +63,11 @@ async fn redis_start(pairs_sync: mpsc::Sender<Vec<StakingPoolSyncData>>) {
     ))
     .await;
 
-    let mut delegators = HashSet::new();
-    let mut cursor = "0".to_string();
+    let mut delegators_list = vec![];
     let mut total_accounts = 0;
+    let mut cursor = "0".to_string();
     let mut last_multiplier = 0;
-    // Get all delegators and pools they staked to
+    // Get all delegators
     loop {
         let res: redis::RedisResult<(String, Vec<String>)> =
             with_retries!(read_redis_db, |connection| async {
@@ -80,11 +80,13 @@ async fn redis_start(pairs_sync: mpsc::Sender<Vec<StakingPoolSyncData>>) {
                     .query_async(connection)
                     .await
             });
-        let (next_cursor, keys) = res.expect("Failed to scan delegators");
+
+        let (next_cursor, delegators) = res.expect("Failed to scan delegators");
         cursor = next_cursor;
-        total_accounts += keys.len();
-        delegators.extend(keys);
-        let mult = delegators.len() / 1000;
+        total_accounts += delegators.len();
+        delegators_list.extend(delegators);
+
+        let mult = delegators_list.len() / 1000;
         if last_multiplier < mult {
             last_multiplier = mult;
             tracing::info!(target: PROJECT_ID, "Scanned {} delegators", total_accounts);
@@ -95,18 +97,19 @@ async fn redis_start(pairs_sync: mpsc::Sender<Vec<StakingPoolSyncData>>) {
     }
     tracing::info!(target: PROJECT_ID, "Total delegators scanned: {}", total_accounts);
 
-    // Collect all pools
-    let mut all_pools: HashMap<String, StakingPoolData> = HashMap::new();
-    for (i, key) in delegators.iter().enumerate() {
+    // Collect all pools from delegators
+    let mut pools_to_process: HashMap<String, StakingPoolData> = HashMap::new();
+    for (i, key) in delegators_list.iter().enumerate() {
         if i % 1000 == 0 {
-            tracing::info!(target: PROJECT_ID, "Processed {} delegators out of {}. Total pools to check: {}", i, total_accounts, all_pools.len());
+            tracing::info!(target: PROJECT_ID, "Processed {} delegators out of {}. Total pools to check: {}", i, total_accounts, pools_to_process.len());
         }
-        let res: HashMap<String, String> = with_retries!(read_redis_db, |connection| async {
-            redis::cmd("HGETALL").arg(key).query_async(connection).await
-        })
-        .expect("Failed to get staking pools");
+        let delegator_staking_pools: HashMap<String, String> =
+            with_retries!(read_redis_db, |connection| async {
+                redis::cmd("HGETALL").arg(key).query_async(connection).await
+            })
+            .expect("Failed to get staking pools");
 
-        for (pool_id, block_height) in res {
+        for (pool_id, block_height) in delegator_staking_pools {
             let block_height: BlockHeight = block_height.parse().unwrap_or(0);
             let curr_epoch = block_height / EPOCH_DURATION;
 
@@ -114,7 +117,7 @@ async fn redis_start(pairs_sync: mpsc::Sender<Vec<StakingPoolSyncData>>) {
                 || pool_id.ends_with(".pool.near")
                 || pool_id.ends_with(".pool.f863973.m0")
             {
-                all_pools
+                pools_to_process
                     .entry(pool_id)
                     .and_modify(|data| {
                         if data.latest_epoch < curr_epoch {
@@ -133,11 +136,12 @@ async fn redis_start(pairs_sync: mpsc::Sender<Vec<StakingPoolSyncData>>) {
         }
     }
 
-    tracing::log::info!(target: PROJECT_ID, "Total pools collected: {}", all_pools.len());
+    tracing::log::info!(target: PROJECT_ID, "Total pools collected: {}", pools_to_process.len());
 
-    let mut total_pools_to_update = 0;
     let mut pools_to_update = vec![];
-    for pools_chunk in all_pools.keys().cloned().collect_vec().chunks(1000) {
+    let mut pools_to_update_count = 0;
+
+    for pools_chunk in pools_to_process.keys().cloned().collect_vec().chunks(1000) {
         let owner_exists: Vec<i64> = with_retries!(read_redis_db, |connection| async {
             let mut pipe = redis::pipe();
 
@@ -152,9 +156,9 @@ async fn redis_start(pairs_sync: mpsc::Sender<Vec<StakingPoolSyncData>>) {
 
         for (owner_exists, pool) in owner_exists.iter().zip(pools_chunk) {
             if *owner_exists == 0 {
-                total_pools_to_update += 1;
+                pools_to_update_count += 1;
                 let pool = pool.clone();
-                let pool_data = all_pools.get(&pool).unwrap();
+                let pool_data = pools_to_process.get(&pool).unwrap();
 
                 pools_to_update.push(StakingPoolSyncData {
                     pool_id: pool.clone(),
@@ -180,7 +184,7 @@ async fn redis_start(pairs_sync: mpsc::Sender<Vec<StakingPoolSyncData>>) {
             .expect("Failed to send");
     }
 
-    tracing::info!(target: PROJECT_ID, "Total pools to update: {}", total_pools_to_update);
+    tracing::info!(target: PROJECT_ID, "Total pools to update: {}", pools_to_update_count);
 }
 
 async fn process_owners(
@@ -201,7 +205,7 @@ async fn update_owners(
     pools: Vec<StakingPoolSyncData>,
     rpc_config: &rpc::RpcConfig,
 ) {
-    let pool_lookup: HashMap<String, &StakingPoolSyncData> = pools
+    let pool_lookup_map: HashMap<String, &StakingPoolSyncData> = pools
         .iter()
         .map(|pool| (pool.pool_id.clone(), pool))
         .collect();
@@ -231,7 +235,7 @@ async fn update_owners(
                 _ => unreachable!(),
             };
 
-            if let Some(pool_data) = pool_lookup.get(pool_id) {
+            if let Some(pool_data) = pool_lookup_map.get(pool_id) {
                 let owner_id = result.as_ref().unwrap().unwrap_as_custom().as_str();
                 if owner_id.is_none() {
                     tracing::info!(target: PROJECT_ID, "No owner_id for pool_id {}", pool_id);
