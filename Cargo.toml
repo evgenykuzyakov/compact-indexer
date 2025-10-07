@@ -21,10 +21,6 @@ path = "src/bin/balances_backfill.rs"
 name = "pool-owners-backfill"
 path = "src/bin/pool_owners_backfill.rs"
 
-[[bin]]
-name = "update-stake-delegation"
-path = "src/bin/update_stake_delegation.rs"
-
 [dependencies]
 actix = "=0.13.0"
 actix-web = "4.3.0"

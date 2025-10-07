@@ -2,33 +2,16 @@ mod common;
 mod redis_db;
 mod rpc;
 
-use common::EPOCH_DURATION;
-use fastnear_primitives::near_primitives::types::{BlockHeight, EpochHeight};
+use fastnear_primitives::near_primitives::types::BlockHeight;
 use itertools::Itertools;
 use redis_db::RedisDB;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::env;
 
 use crate::rpc::{fetch_from_rpc, RpcResultPair, RpcTask};
 use dotenv::dotenv;
-use tokio::sync::mpsc;
 
 const PROJECT_ID: &str = "pool_owners_backfill";
-const ST_POOL_INFO_KEY_PREF: &str = "st_pool_info";
-
-#[derive(Debug)]
-pub struct StakingPoolData {
-    pub latest_epoch: EpochHeight,
-    pub latest_interaction_block: BlockHeight,
-    pub first_interaction_block_in_epoch: BlockHeight,
-}
-
-#[derive(Debug)]
-pub struct StakingPoolSyncData {
-    pub pool_id: String,
-    pub latest_interaction_block: BlockHeight,
-    pub first_interaction_block_in_epoch: BlockHeight,
-}
 
 #[tokio::main]
 async fn main() {
@@ -41,33 +24,42 @@ async fn main() {
 
     let rpc_config = rpc::RpcConfig::from_env();
 
-    let streamer = redis_streamer();
-
-    let redis_db = RedisDB::new(Some(
-        env::var("WRITE_REDIS_URL").expect("Missing env WRITE_REDIS_URL"),
-    ))
-    .await;
-
-    process_owners(streamer, redis_db, &rpc_config).await;
-}
-
-fn redis_streamer() -> mpsc::Receiver<Vec<StakingPoolSyncData>> {
-    let (sender, receiver) = mpsc::channel(100);
-    tokio::spawn(redis_start(sender));
-    receiver
-}
-
-async fn redis_start(pairs_sync: mpsc::Sender<Vec<StakingPoolSyncData>>) {
-    let mut read_redis_db = RedisDB::new(Some(
+    let read_redis_db = RedisDB::new(Some(
         env::var("EXPORT_READ_REDIS_URL").expect("Missing env EXPORT_READ_REDIS_URL"),
     ))
     .await;
 
+    let write_redis_db = RedisDB::new(Some(
+        env::var("WRITE_REDIS_URL").expect("Missing env WRITE_REDIS_URL"),
+    ))
+    .await;
+
+    process_owners(read_redis_db, write_redis_db, &rpc_config).await;
+}
+
+async fn process_owners(
+    mut read_redis_db: RedisDB,
+    mut write_redis_db: RedisDB,
+    rpc_config: &rpc::RpcConfig,
+) {
+    let delegators_list = scan_all_delegators(&mut read_redis_db).await;
+
+    let pools_to_process =
+        collect_pools_from_delegators(&mut read_redis_db, &delegators_list).await;
+
+    let owner_pools = fetch_pool_owners(&mut read_redis_db, &pools_to_process, rpc_config).await;
+
+    let owners_to_update = fetch_missing_owner_stakes(&mut read_redis_db, &owner_pools).await;
+
+    update_owner_stakes(&mut write_redis_db, &owners_to_update, &pools_to_process).await;
+}
+
+async fn scan_all_delegators(read_redis_db: &mut RedisDB) -> Vec<String> {
     let mut delegators_list = vec![];
     let mut total_accounts = 0;
     let mut cursor = "0".to_string();
     let mut last_multiplier = 0;
-    // Get all delegators
+
     loop {
         let res: redis::RedisResult<(String, Vec<String>)> =
             with_retries!(read_redis_db, |connection| async {
@@ -97,8 +89,16 @@ async fn redis_start(pairs_sync: mpsc::Sender<Vec<StakingPoolSyncData>>) {
     }
     tracing::info!(target: PROJECT_ID, "Total delegators scanned: {}", total_accounts);
 
-    // Collect all pools from delegators
-    let mut pools_to_process: HashMap<String, StakingPoolData> = HashMap::new();
+    delegators_list
+}
+
+async fn collect_pools_from_delegators(
+    read_redis_db: &mut RedisDB,
+    delegators_list: &[String],
+) -> HashMap<String, BlockHeight> {
+    let mut pools_to_process: HashMap<String, BlockHeight> = HashMap::new();
+    let total_accounts = delegators_list.len();
+
     for (i, key) in delegators_list.iter().enumerate() {
         if i % 1000 == 0 {
             tracing::info!(target: PROJECT_ID, "Processed {} delegators out of {}. Total pools to check: {}", i, total_accounts, pools_to_process.len());
@@ -110,8 +110,7 @@ async fn redis_start(pairs_sync: mpsc::Sender<Vec<StakingPoolSyncData>>) {
             .expect("Failed to get staking pools");
 
         for (pool_id, block_height) in delegator_staking_pools {
-            let block_height: BlockHeight = block_height.parse().unwrap_or(0);
-            let curr_epoch = block_height / EPOCH_DURATION;
+            let curr_block_height: BlockHeight = block_height.parse().unwrap_or(0);
 
             if pool_id.ends_with(".poolv1.near")
                 || pool_id.ends_with(".pool.near")
@@ -119,145 +118,116 @@ async fn redis_start(pairs_sync: mpsc::Sender<Vec<StakingPoolSyncData>>) {
             {
                 pools_to_process
                     .entry(pool_id)
-                    .and_modify(|data| {
-                        if data.latest_epoch < curr_epoch {
-                            data.latest_epoch = curr_epoch;
-                            data.first_interaction_block_in_epoch = block_height;
+                    .and_modify(|block_height_entry| {
+                        if curr_block_height < *block_height_entry {
+                            *block_height_entry = curr_block_height;
                         }
-
-                        data.latest_interaction_block = block_height;
                     })
-                    .or_insert(StakingPoolData {
-                        latest_epoch: curr_epoch,
-                        latest_interaction_block: block_height,
-                        first_interaction_block_in_epoch: block_height,
-                    });
+                    .or_insert(curr_block_height);
             }
         }
     }
 
     tracing::log::info!(target: PROJECT_ID, "Total pools collected: {}", pools_to_process.len());
 
-    let mut pools_to_update = vec![];
-    let mut pools_to_update_count = 0;
+    pools_to_process
+}
+
+async fn fetch_pool_owners(
+    _read_redis_db: &mut RedisDB,
+    pools_to_process: &HashMap<String, BlockHeight>,
+    rpc_config: &rpc::RpcConfig,
+) -> HashMap<String, Vec<String>> {
+    let mut owner_pools: HashMap<String, Vec<String>> = HashMap::new();
 
     for pools_chunk in pools_to_process.keys().cloned().collect_vec().chunks(1000) {
-        let owner_exists: Vec<i64> = with_retries!(read_redis_db, |connection| async {
-            let mut pipe = redis::pipe();
+        let mut tasks = vec![];
 
-            for pool in pools_chunk {
-                pipe.cmd("EXISTS")
-                    .arg(format!("{}:{}", ST_POOL_INFO_KEY_PREF, pool));
-            }
+        tasks.extend(pools_chunk.iter().map(|pool| RpcTask::Custom {
+            block_height: None,
+            account_id: pool.clone(),
+            method_name: "get_owner_id".to_owned(),
+            args: "".to_owned(),
+        }));
 
-            pipe.query_async(connection).await
-        })
-        .expect("Failed to check if owner exists for pool");
-
-        for (owner_exists, pool) in owner_exists.iter().zip(pools_chunk) {
-            if *owner_exists == 0 {
-                pools_to_update_count += 1;
-                let pool = pool.clone();
-                let pool_data = pools_to_process.get(&pool).unwrap();
-
-                pools_to_update.push(StakingPoolSyncData {
-                    pool_id: pool.clone(),
-                    latest_interaction_block: pool_data.latest_interaction_block,
-                    first_interaction_block_in_epoch: pool_data.first_interaction_block_in_epoch,
-                });
-                if pools_to_update.len() == 1000 {
-                    let mut new_to_update = vec![];
-                    std::mem::swap(&mut new_to_update, &mut pools_to_update);
-                    pairs_sync
-                        .send(new_to_update)
-                        .await
-                        .expect("Failed to send");
-                }
-            }
-        }
-    }
-
-    if !pools_to_update.is_empty() {
-        pairs_sync
-            .send(pools_to_update)
+        let rpc_result_owners = fetch_from_rpc(&tasks, rpc_config)
             .await
-            .expect("Failed to send");
-    }
+            .expect("Failed to fetch owners from RPC");
 
-    tracing::info!(target: PROJECT_ID, "Total pools to update: {}", pools_to_update_count);
-}
-
-async fn process_owners(
-    mut stream: mpsc::Receiver<Vec<StakingPoolSyncData>>,
-    mut redis_db: RedisDB,
-    rpc_config: &rpc::RpcConfig,
-) {
-    let mut total_pools = 0;
-    while let Some(pools) = stream.recv().await {
-        total_pools += pools.len();
-        update_owners(&mut redis_db, pools, rpc_config).await;
-        tracing::info!(target: PROJECT_ID, "Processed {} pools", total_pools);
-    }
-}
-
-async fn update_owners(
-    redis_db: &mut RedisDB,
-    pools: Vec<StakingPoolSyncData>,
-    rpc_config: &rpc::RpcConfig,
-) {
-    let pool_lookup_map: HashMap<String, &StakingPoolSyncData> = pools
-        .iter()
-        .map(|pool| (pool.pool_id.clone(), pool))
-        .collect();
-    let mut tasks = vec![];
-
-    tasks.extend(pools.iter().map(|pool| RpcTask::Custom {
-        block_height: None,
-        account_id: pool.pool_id.clone(),
-        method_name: "get_owner_id".to_string(),
-        args: "".to_string(),
-    }));
-
-    let results = fetch_from_rpc(&tasks, rpc_config)
-        .await
-        .expect("Failed to fetch updates from the RPC");
-
-    let res: redis::RedisResult<()> = with_retries!(redis_db, |connection| async {
-        let mut pipe = redis::pipe();
-
-        for RpcResultPair { task, result } in &results {
-            if result.is_none() {
-                tracing::info!(target: PROJECT_ID, "No result for task {:?}", task);
-                continue;
-            }
-            let pool_id = match task {
+        for RpcResultPair { task, result } in rpc_result_owners {
+            let pool = match task {
                 RpcTask::Custom { account_id, .. } => account_id,
                 _ => unreachable!(),
             };
 
-            if let Some(pool_data) = pool_lookup_map.get(pool_id) {
-                let owner_id = result.as_ref().unwrap().unwrap_as_custom().as_str();
-                if owner_id.is_none() {
-                    tracing::info!(target: PROJECT_ID, "No owner_id for pool_id {}", pool_id);
-                    continue;
+            let owner_id = result.as_ref().unwrap().unwrap_as_custom().as_str();
+            if owner_id.is_none() {
+                tracing::info!(target: PROJECT_ID, "No owner_id for pool_id {}", pool);
+                continue;
+            }
+            let owner_id = owner_id.unwrap();
+
+            owner_pools
+                .entry(owner_id.to_string())
+                .and_modify(|owner_pools| owner_pools.push(pool.clone()))
+                .or_insert(vec![pool]);
+        }
+    }
+
+    tracing::log::info!(target: PROJECT_ID, "Total owner collected: {}", owner_pools.len());
+
+    owner_pools
+}
+
+async fn fetch_missing_owner_stakes(
+    read_redis_db: &mut RedisDB,
+    owner_pools: &HashMap<String, Vec<String>>,
+) -> Vec<(String, String)> {
+    let mut owners_to_update = vec![];
+
+    for owner_chunk in owner_pools.iter().collect_vec().chunks(100) {
+        let check_results: Vec<Option<String>> = with_retries!(read_redis_db, |connection| async {
+            let mut pipe = redis::pipe();
+
+            for (owner, pools_vec) in owner_chunk {
+                for pool in *pools_vec {
+                    pipe.cmd("HGET").arg(format!("st:{}", owner)).arg(pool);
                 }
-                let owner_id = owner_id.unwrap();
+            }
 
-                // Set the pool_owner for pool_id
-                // (st_pool_info of `pool_id` -> `owner_id:account_id`, `latest_stake_block:block_height`)
-                pipe.cmd("HSET")
-                    .arg(format!("{}:{}", ST_POOL_INFO_KEY_PREF, pool_id))
-                    .arg("owner_id")
-                    .arg(owner_id)
-                    .arg("latest_stake_block")
-                    .arg(pool_data.latest_interaction_block.to_string())
-                    .ignore();
+            pipe.query_async(connection).await
+        })
+        .expect("Failed to batch check pools");
 
-                // Add owner as automatically staked to this pool
+        let mut result_idx = 0;
+        for (owner, pools_vec) in owner_chunk {
+            for pool in *pools_vec {
+                if check_results[result_idx].is_none() {
+                    owners_to_update.push(((*owner).clone(), (*pool).clone()));
+                }
+                result_idx += 1;
+            }
+        }
+    }
+    tracing::log::info!(target: PROJECT_ID, "Total owners to process: {}", owners_to_update.len());
+
+    owners_to_update
+}
+
+async fn update_owner_stakes(
+    write_redis_db: &mut RedisDB,
+    owners_to_update: &[(String, String)],
+    pools_to_process: &HashMap<String, BlockHeight>,
+) {
+    let res: redis::RedisResult<()> = with_retries!(write_redis_db, |connection| async {
+        let mut pipe = redis::pipe();
+
+        for (owner, pool) in owners_to_update {
+            if let Some(block_height) = pools_to_process.get(pool) {
                 pipe.cmd("HSET")
-                    .arg(format!("st:{}", owner_id))
-                    .arg(pool_id)
-                    .arg(pool_data.first_interaction_block_in_epoch.to_string())
+                    .arg(format!("st:{}", owner))
+                    .arg(pool)
+                    .arg(block_height)
                     .ignore();
             }
         }

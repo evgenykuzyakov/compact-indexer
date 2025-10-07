@@ -1,8 +1,5 @@
 use tracing_subscriber::EnvFilter;
 
-// Epoch len in blocks from docs.near
-pub const EPOCH_DURATION: u64 = 43_200;
-
 pub fn setup_tracing(default: &str) {
     let mut env_filter = EnvFilter::new(default);
 
