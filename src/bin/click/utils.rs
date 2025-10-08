@@ -21,7 +21,7 @@ pub fn extract_return_value_int(execution_status: ExecutionStatusView) -> Option
 pub struct ArgsData {
     pub account_id: Option<AccountId>,
     pub args_new_account_id: Option<AccountId>,
-    pub args_owner_id: Option<AccountId>,
+    pub owner_id: Option<AccountId>,
     pub receiver_id: Option<AccountId>,
     pub sender_id: Option<AccountId>,
     pub token_id: Option<String>,
@@ -311,9 +311,7 @@ pub fn extract_rows(msg: BlockWithTxHashes) -> (Vec<ActionRow>, Vec<EventRow>) {
                                     .map(|new_account_id| new_account_id.to_string())
                             }),
                             args_owner_id: args_data.as_ref().and_then(|args| {
-                                args.args_owner_id
-                                    .as_ref()
-                                    .map(|owner_id| owner_id.to_string())
+                                args.owner_id.as_ref().map(|owner_id| owner_id.to_string())
                             }),
                             args_receiver_id: args_data.as_ref().and_then(|args| {
                                 args.receiver_id

@@ -1,6 +1,6 @@
 [package]
 name = "compact-indexer"
-version = "0.31.0"
+version = "0.32.0"
 authors = ["Eugene The Dream"]
 rust-version = "1.86.0"
 edition = "2021"
@@ -16,6 +16,10 @@ path = "src/bin/update_balances.rs"
 [[bin]]
 name = "balances-backfill"
 path = "src/bin/balances_backfill.rs"
+
+[[bin]]
+name = "pool-owners-backfill"
+path = "src/bin/pool_owners_backfill.rs"
 
 [dependencies]
 actix = "=0.13.0"

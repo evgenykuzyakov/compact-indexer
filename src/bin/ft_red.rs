@@ -144,12 +144,14 @@ async fn listen_blocks(
             &mut to_update,
             block_height,
         );
+
         add_pairs_to_update(
             "st",
             extract_staking_pairs(&actions, chain_id),
             &mut to_update,
             block_height,
         );
+
         let public_key_updates = extract_public_keys(&actions, chain_id);
 
         tracing::log::info!(target: PROJECT_ID, "Updating {} accounts, {} keys", to_update.len(), public_key_updates.len());
@@ -213,12 +215,26 @@ async fn listen_blocks(
 
 fn extract_staking_pairs(actions: &[ActionRow], _chain_id: ChainId) -> HashSet<PairUpdate> {
     // Extract matching (account_id, validator_id) for staking changes
+    // plus (owner_id, pool_id) for staking pool creations
     let mut pairs = HashSet::new();
     for action in actions {
         if action.status != ReceiptStatus::Success || action.action != ActionKind::FunctionCall {
             continue;
         }
-        if action.account_id.ends_with(".poolv1.near")
+
+        if action.method_name == Some("new".to_string())
+            && (action.predecessor_id == "poolv1.near"
+                || action.predecessor_id == "pool.near"
+                || action.predecessor_id == "pool.f863973.m0")
+        {
+            let staking_pool_owner = action.args_owner_id.clone().unwrap();
+            let staking_pool = action.account_id.clone();
+
+            pairs.insert(PairUpdate {
+                account_id: staking_pool_owner,
+                token_id: staking_pool,
+            });
+        } else if action.account_id.ends_with(".poolv1.near")
             || action.account_id.ends_with(".pool.near")
             || action.account_id.ends_with(".pool.f863973.m0")
         {
@@ -226,6 +242,39 @@ fn extract_staking_pairs(actions: &[ActionRow], _chain_id: ChainId) -> HashSet<P
                 account_id: action.predecessor_id.clone(),
                 token_id: action.account_id.clone(),
             });
+        }
+    }
+
+    pairs
+}
+
+fn extract_staking_pool_creations(
+    actions: &[ActionRow],
+    _chain_id: ChainId,
+) -> HashMap<String, HashSet<String>> {
+    let mut pairs: HashMap<String, HashSet<String>> = HashMap::new();
+
+    // NOTE: Maybe use "on_staking_pool_create" instead of "new"?
+    for action in actions {
+        if action.method_name != Some("new".to_string())
+            || action.status != ReceiptStatus::Success
+            || action.action != ActionKind::FunctionCall
+        {
+            continue;
+        }
+
+        if action.predecessor_id == "poolv1.near"
+            || action.predecessor_id == "pool.near"
+            || action.predecessor_id == "pool.f863973.m0"
+        {
+            let staking_pool_owner = action.args_owner_id.clone().unwrap();
+            let staking_pool = action.account_id.clone();
+
+            if let Some(pools_list) = pairs.get_mut(&staking_pool_owner) {
+                pools_list.insert(staking_pool);
+            } else {
+                pairs.insert(staking_pool_owner, HashSet::from([staking_pool]));
+            }
         }
     }
 
