@@ -42,6 +42,7 @@ pub enum PublicKeyUpdateType {
 
 #[tokio::main]
 async fn main() {
+    #[allow(deprecated)]
     openssl_probe::init_ssl_cert_env_vars();
     dotenv().ok();
 
