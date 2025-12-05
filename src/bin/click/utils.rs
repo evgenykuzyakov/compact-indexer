@@ -291,6 +291,9 @@ pub fn extract_rows(msg: BlockWithTxHashes) -> (Vec<ActionRow>, Vec<EventRow>) {
                                 ActionView::Transfer { deposit, .. } => Some(*deposit),
                                 ActionView::Stake { stake, .. } => Some(*stake),
                                 ActionView::FunctionCall { deposit, .. } => Some(*deposit),
+                                ActionView::DeterministicStateInit { deposit, .. } => {
+                                    Some(*deposit)
+                                }
                                 _ => None,
                             }
                             .map(|d| d.as_yoctonear()),
