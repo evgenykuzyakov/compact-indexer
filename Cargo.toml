@@ -58,3 +58,4 @@ fastnear-neardata-fetcher = "0.34.2"
 near-crypto = "0.34.2"
 
 signal-hook = "0.3.18"
+futures = "0.3.31"
