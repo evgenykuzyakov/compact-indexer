@@ -126,7 +126,7 @@ pub fn extract_rows(msg: BlockWithTxHashes) -> (Vec<ActionRow>, Vec<EventRow>) {
                 receiver_id: account_id,
                 receipt_id,
                 receipt,
-                priority: _priority,
+                _priority,
             } = outcome.receipt;
             let predecessor_id = predecessor_id.to_string();
             let account_id = account_id.to_string();
@@ -259,6 +259,10 @@ pub fn extract_rows(msg: BlockWithTxHashes) -> (Vec<ActionRow>, Vec<EventRow>) {
                                 ActionView::DeterministicStateInit { .. } => {
                                     ActionKind::DeterministicStateInit
                                 }
+                                ActionView::TransferToGasKey { .. } => ActionKind::TransferToGasKey,
+                                ActionView::WithdrawFromGasKey { .. } => {
+                                    ActionKind::WithdrawFromGasKey
+                                }
                             },
                             contract_hash: match &action {
                                 ActionView::DeployContract { code } => {
@@ -271,6 +275,12 @@ pub fn extract_rows(msg: BlockWithTxHashes) -> (Vec<ActionRow>, Vec<EventRow>) {
                                     Some(public_key.to_string())
                                 }
                                 ActionView::DeleteKey { public_key, .. } => {
+                                    Some(public_key.to_string())
+                                }
+                                ActionView::TransferToGasKey { public_key, .. } => {
+                                    Some(public_key.to_string())
+                                }
+                                ActionView::WithdrawFromGasKey { public_key, .. } => {
                                     Some(public_key.to_string())
                                 }
                                 _ => None,
@@ -294,6 +304,8 @@ pub fn extract_rows(msg: BlockWithTxHashes) -> (Vec<ActionRow>, Vec<EventRow>) {
                                 ActionView::DeterministicStateInit { deposit, .. } => {
                                     Some(*deposit)
                                 }
+                                ActionView::TransferToGasKey { deposit, .. } => Some(*deposit),
+                                ActionView::WithdrawFromGasKey { amount, .. } => Some(*amount),
                                 _ => None,
                             }
                             .map(|d| d.as_yoctonear()),

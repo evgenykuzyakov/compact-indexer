@@ -31,6 +31,8 @@ pub enum ActionKind {
     UseGlobalContract = 12,
     UseGlobalContractByAccountId = 13,
     DeterministicStateInit = 14,
+    TransferToGasKey = 15,
+    WithdrawFromGasKey = 16,
 }
 
 #[derive(Serialize)]
