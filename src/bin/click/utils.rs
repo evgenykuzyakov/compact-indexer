@@ -263,6 +263,7 @@ pub fn extract_rows(msg: BlockWithTxHashes) -> (Vec<ActionRow>, Vec<EventRow>) {
                                 ActionView::WithdrawFromGasKey { .. } => {
                                     ActionKind::WithdrawFromGasKey
                                 }
+                                ActionView::DelegateV2 { .. } => ActionKind::DelegateV2,
                             },
                             contract_hash: match &action {
                                 ActionView::DeployContract { code } => {

@@ -33,6 +33,7 @@ pub enum ActionKind {
     DeterministicStateInit = 14,
     TransferToGasKey = 15,
     WithdrawFromGasKey = 16,
+    DelegateV2 = 17,
 }
 
 #[derive(Serialize)]
